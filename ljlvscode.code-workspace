@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"闪烁灯.C": "cpp"
+		}
+	}
+}
