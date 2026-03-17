@@ -33,25 +33,25 @@
       <el-main>
         <div class="features">
           <el-row :gutter="20">
-            <el-col :span="24" :md="8">
+            <el-col :span="24" :md="12">
               <el-card class="feature-card" @click="$router.push('/houses')">
                 <h3>房源浏览</h3>
                 <p>海量真实房源信息</p>
               </el-card>
             </el-col>
-            <el-col :span="24" :md="8">
+            <el-col :span="24" :md="12">
               <el-card class="feature-card" @click="$router.push('/map')">
                 <h3>地图找房</h3>
                 <p>直观的地图找房体验</p>
               </el-card>
             </el-col>
-            <el-col :span="24" :md="8">
+            <el-col :span="24" :md="12">
               <el-card class="feature-card" @click="$router.push('/chat')">
                 <h3>在线沟通</h3>
                 <p>与房东直接交流</p>
               </el-card>
             </el-col>
-            <el-col :span="24" :md="8">
+            <el-col :span="24" :md="12">
               <el-card class="feature-card" @click="$router.push('/publish')">
                 <h3>发布房源</h3>
                 <p>房东一键发布出租信息</p>

@@ -55,6 +55,7 @@
             <el-col :span="24" :md="6" class="filter-sidebar">
               <el-card class="filter-card">
                 <div class="filter-section">
+                  <h2>筛选房源</h2>
                   <h4>位置</h4>
                   <el-input
                     v-model="filters.location"
@@ -482,6 +483,7 @@ onMounted(async () => {
 .pagination-top,
 .pagination-bottom {
   padding: 10px 0;
+  padding-left: 30px;
   background-color: white;
   position: sticky;
   z-index: 10;
