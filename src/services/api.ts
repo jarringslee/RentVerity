@@ -343,11 +343,51 @@ export const login = async (username: string, password: string) => {
 }
 
 // 注册 —— 调用后端 /auth/register
-export const register = async (username: string, phone: string, password: string, preferences: string[] = []) => {
-  const preference = preferences.length > 0 ? preferences[0] : null
+export const register = async (payload: {
+  username: string
+  phone: string
+  password: string
+  preferences?: string[]
+  gender?: 'male' | 'female'
+  city?: string | null
+}) => {
   return request('/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ username, phone, password, preference })
+    body: JSON.stringify({
+      username: payload.username,
+      phone: payload.phone,
+      password: payload.password,
+      preferences: payload.preferences ?? [],
+      gender: payload.gender ?? 'male',
+      city: payload.city ?? null
+    })
+  })
+}
+
+// 获取当前用户资料（需登录）
+export const fetchUserProfile = async () => {
+  return request('/users/me')
+}
+
+// 更新基本资料（需登录）：用户名、手机号、性别、城市、个人偏好（多选）
+export const updateUserProfile = async (payload: {
+  username?: string
+  phone?: string
+  gender?: 'male' | 'female'
+  city?: string | null
+  preferences?: string[]
+}) => {
+  return request('/users/me', {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  })
+}
+
+// 修改密码：需原密码；后端校验新密码不可与旧密码相同（需登录）
+export const changeUserPassword = async (payload: { oldPassword: string; newPassword: string }) => {
+  return request('/users/me/password', {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
   })
 }
 

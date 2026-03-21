@@ -9,20 +9,20 @@
         :model="registerForm"
         :rules="rules"
         ref="registerFormRef"
-        label-width="80px"
+        label-width="90px"
       >
         <el-form-item label="用户名" prop="username">
           <el-input
             v-model="registerForm.username"
             placeholder="请输入用户名"
-          ></el-input>
+          />
         </el-form-item>
 
         <el-form-item label="手机号" prop="phone">
           <el-input
             v-model="registerForm.phone"
             placeholder="请输入手机号"
-          ></el-input>
+          />
         </el-form-item>
 
         <el-form-item label="密码" prop="password">
@@ -31,8 +31,7 @@
             type="password"
             placeholder="请输入密码"
             show-password
-          >
-          </el-input>
+          />
         </el-form-item>
 
         <el-form-item label="确认密码" prop="confirmPassword">
@@ -41,40 +40,44 @@
             type="password"
             placeholder="请再次输入密码"
             show-password
-          >
-          </el-input>
+          />
         </el-form-item>
 
-        <el-form-item label="偏好设置">
-          <el-select
-            v-model="registerForm.preference"
-            placeholder="请选择您的偏好"
+        <el-form-item label="性别" prop="gender">
+          <el-radio-group v-model="registerForm.gender">
+            <el-radio label="male">男</el-radio>
+            <el-radio label="female">女</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item label="地区">
+          <el-cascader
+            v-model="regionCodes"
+            :options="provinceAndCityData"
+            :props="{ expandTrigger: 'hover' }"
+            placeholder="请先选省，再选市（区）"
+            filterable
+            clearable
             style="width: 100%"
-          >
-            <!-- <el-option label="孕妇" value="pregnant"></el-option>
-            <el-option label="大学生" value="student"></el-option>
-            <el-option label="打工人" value="worker"></el-option>
-            <el-option label="老人" value="elderly"></el-option> -->
-            <el-option label="舒适度优先" value="comfort-demand"></el-option>
-            <el-option
-              label="性价比优先"
-              value="effectiveness-demand"
-            ></el-option>
-            <el-option
-              label="交通便捷优先"
-              value="transportatuon-demand"
-            ></el-option>
-            <el-option
-              label="便民设施完善优先"
-              value="facility-demand"
-            ></el-option>
-          </el-select>
+          />
+        </el-form-item>
+
+        <el-form-item label="个人偏好">
+          <el-checkbox-group v-model="registerForm.preferences" class="pref-group">
+            <el-checkbox
+              v-for="opt in PERSONAL_PREFERENCE_OPTIONS"
+              :key="opt.value"
+              :label="opt.value"
+            >
+              {{ opt.label }}
+            </el-checkbox>
+          </el-checkbox-group>
         </el-form-item>
 
         <el-form-item>
-          <el-button type="primary" @click="handleRegister" style="width: 100%"
-            >注册</el-button
-          >
+          <el-button type="primary" style="width: 100%" @click="handleRegister">
+            注册
+          </el-button>
         </el-form-item>
 
         <div class="form-footer">
@@ -86,79 +89,80 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from "vue";
-import { useRouter } from "vue-router";
-import type { FormInstance } from "element-plus";
-import { register } from "../services/api";
+import { reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import type { FormInstance } from 'element-plus'
+import { register } from '../services/api'
+import { PERSONAL_PREFERENCE_OPTIONS } from '../constants/userPreferences'
+import {
+  provinceAndCityData,
+  cityLabelFromCodes
+} from '../utils/chinaRegion'
 
-const router = useRouter();
-const registerFormRef = ref<FormInstance>();
+const router = useRouter()
+const registerFormRef = ref<FormInstance>()
+/** 省市区级联 value，与 element-china-area-data 一致 */
+const regionCodes = ref<string[]>([])
 
-// 注册表单数据
 const registerForm = reactive({
-  username: "",
-  phone: "",
-  password: "",
-  confirmPassword: "",
-  preference: "", // 单选偏好
-});
+  username: '',
+  phone: '',
+  password: '',
+  confirmPassword: '',
+  gender: 'male' as 'male' | 'female',
+  preferences: [] as string[]
+})
 
-// 表单验证规则
 const rules = {
-  username: [{ required: true, message: "请输入用户名", trigger: "blur" }],
+  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   phone: [
-    { required: true, message: "请输入手机号", trigger: "blur" },
+    { required: true, message: '请输入手机号', trigger: 'blur' },
     {
       pattern: /^1[3-9]\d{9}$/,
-      message: "请输入正确的手机号格式",
-      trigger: "blur",
-    },
+      message: '请输入正确的手机号格式',
+      trigger: 'blur'
+    }
   ],
   password: [
-    { required: true, message: "请输入密码", trigger: "blur" },
-    { min: 6, message: "密码长度至少6位", trigger: "blur" },
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    { min: 6, message: '密码长度至少6位', trigger: 'blur' }
   ],
   confirmPassword: [
-    { required: true, message: "请再次输入密码", trigger: "blur" },
+    { required: true, message: '请再次输入密码', trigger: 'blur' },
     {
-      validator: (rule: any, value: string, callback: any) => {
+      validator: (_rule: unknown, value: string, callback: (e?: Error) => void) => {
         if (value !== registerForm.password) {
-          callback(new Error("两次输入的密码不一致"));
+          callback(new Error('两次输入的密码不一致'))
         } else {
-          callback();
+          callback()
         }
       },
-      trigger: "blur",
-    },
+      trigger: 'blur'
+    }
   ],
-  preference: [
-    { required: true, message: "请选择您的偏好", trigger: "change" },
-  ],
-};
+  gender: [{ required: true, message: '请选择性别', trigger: 'change' }]
+}
 
-// 处理注册
 const handleRegister = async () => {
-  if (!registerFormRef.value) return;
+  if (!registerFormRef.value) return
 
   await registerFormRef.value.validate(async (valid) => {
-    if (valid) {
-      // 调用注册API，传递偏好设置
-      const res = await register(
-        registerForm.username,
-        registerForm.phone,
-        registerForm.password,
-        [registerForm.preference] // 将单个偏好转换为数组形式传入
-      );
-      if (res.success) {
-        // 注册成功后跳转到登录页
-        router.push("/login");
-      } else {
-        // 显示错误信息
-        alert(res.message);
-      }
+    if (!valid) return
+    const res = await register({
+      username: registerForm.username,
+      phone: registerForm.phone,
+      password: registerForm.password,
+      preferences: registerForm.preferences,
+      gender: registerForm.gender,
+      city: cityLabelFromCodes(regionCodes.value) || null
+    })
+    if (res.success) {
+      router.push('/login')
+    } else {
+      alert(res.message)
     }
-  });
-};
+  })
+}
 </script>
 
 <style scoped>
@@ -166,12 +170,14 @@ const handleRegister = async () => {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100vh;
+  min-height: 100vh;
+  padding: 24px 12px;
   background-color: #f5f5f5;
 }
 
 .register-card {
-  width: 400px;
+  width: 100%;
+  max-width: 480px;
 }
 
 .card-header {
@@ -181,5 +187,11 @@ const handleRegister = async () => {
 
 .form-footer {
   text-align: center;
+}
+
+.pref-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 </style>

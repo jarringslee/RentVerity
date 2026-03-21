@@ -5,6 +5,7 @@ import { pool } from './config/db';
 import authRouter from './routes/auth';
 import housesRouter from './routes/houses';
 import favoritesRouter from './routes/favorites';
+import usersRouter from './routes/users';
 
 dotenv.config();
 
@@ -33,6 +34,7 @@ app.get('/test-db', async (req, res) => {
 app.use('/auth', authRouter);
 app.use('/houses', housesRouter);
 app.use('/favorites', favoritesRouter);
+app.use('/users', usersRouter);
 
 const PORT = process.env.PORT || 3001;
 

@@ -35,6 +35,20 @@ const setCurrentUser = (user: any) => {
   persistUser(user)
 }
 
+// 合并更新当前用户信息（保留 token 等未返回字段）
+const mergeCurrentUser = (partial: Record<string, any>) => {
+  if (!currentUser.value) return
+  const next = {
+    ...currentUser.value,
+    ...partial
+  }
+  // 已改用多选 preferences，去掉旧字段 preference 避免与展示不一致
+  if ('preferences' in partial) {
+    delete next.preference
+  }
+  setCurrentUser(next)
+}
+
 // 清除当前用户
 const clearCurrentUser = () => {
   currentUser.value = null
@@ -54,6 +68,7 @@ const getToken = () => {
 export default {
   currentUser,
   setCurrentUser,
+  mergeCurrentUser,
   clearCurrentUser,
   isLoggedIn,
   getToken
