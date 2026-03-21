@@ -15,6 +15,8 @@ interface BMapGL {
   Geocoder: BMapGL_GeocoderConstructor
   NavigationControl: BMapGL_NavigationControlConstructor
   ScaleControl: BMapGL_ScaleControlConstructor
+  Icon: BMapGL_IconConstructor
+  Size: BMapGL_SizeConstructor
 }
 
 interface BMapGL_MapConstructor {
@@ -35,6 +37,8 @@ interface BMapGL_Map {
   openInfoWindow(infoWnd: BMapGL_InfoWindow, point: BMapGL_Point): void
   zoomIn(): void
   zoomOut(): void
+  setViewport?(points: BMapGL_Point[]): void
+  panTo?(point: BMapGL_Point): void
 }
 
 interface BMapGL_PointConstructor {
@@ -47,12 +51,27 @@ interface BMapGL_Point {
 }
 
 interface BMapGL_MarkerConstructor {
-  new (point: BMapGL_Point): BMapGL_Marker
+  new (point: BMapGL_Point, opts?: { icon?: BMapGL_Icon }): BMapGL_Marker
 }
 
 interface BMapGL_Marker {
   addEventListener(event: string, handler: Function): void
 }
+
+interface BMapGL_SizeConstructor {
+  new (width: number, height: number): BMapGL_Size
+}
+
+interface BMapGL_Size {
+  width: number
+  height: number
+}
+
+interface BMapGL_IconConstructor {
+  new (url: string, size: BMapGL_Size, opts?: { anchor?: BMapGL_Size }): BMapGL_Icon
+}
+
+interface BMapGL_Icon {}
 
 interface BMapGL_InfoWindowConstructor {
   new (content: string, opts?: BMapGL_InfoWindowOptions): BMapGL_InfoWindow
@@ -71,7 +90,11 @@ interface BMapGL_GeocoderConstructor {
 }
 
 interface BMapGL_Geocoder {
-  getPoint(address: string, callback: (point: BMapGL_Point) => void, city: string): void
+  getPoint(
+    address: string,
+    callback: (point: BMapGL_Point | null) => void,
+    city: string
+  ): void
 }
 
 interface BMapGL_NavigationControlConstructor {

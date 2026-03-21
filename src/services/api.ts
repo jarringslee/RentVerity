@@ -414,6 +414,8 @@ const transformHouseFromApi = (house: any) => {
     title: house.title,
     price: house.price,
     location: house.location,
+    lng: house.lng != null ? Number(house.lng) : null,
+    lat: house.lat != null ? Number(house.lat) : null,
     description: house.description,
     image: house.image,
     tags: typeof house.tags === 'string' && house.tags.length > 0
@@ -518,6 +520,8 @@ export const publishHouse = async (payload: {
   title: string
   price: number
   location: string
+  lng?: number | null
+  lat?: number | null
   description?: string
   image?: string
   tags?: string[]

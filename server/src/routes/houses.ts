@@ -69,6 +69,8 @@ router.post('/', requireAuth, async (req, res) => {
       title,
       price,
       location,
+      lng,
+      lat,
       description,
       image,
       tags,
@@ -87,16 +89,27 @@ router.post('/', requireAuth, async (req, res) => {
       });
     }
 
+    let lngVal: number | null = lng === undefined || lng === null || lng === '' ? null : Number(lng);
+    let latVal: number | null = lat === undefined || lat === null || lat === '' ? null : Number(lat);
+    if (lngVal !== null && (Number.isNaN(lngVal) || lngVal < 70 || lngVal > 140)) lngVal = null;
+    if (latVal !== null && (Number.isNaN(latVal) || latVal < 10 || latVal > 55)) latVal = null;
+    if ((lngVal === null) !== (latVal === null)) {
+      lngVal = null;
+      latVal = null;
+    }
+
     const [result] = await pool.query(
       `
       INSERT INTO houses 
-      (title, price, location, description, image, tags, risk_level, area, floor, orientation, landlord_name, landlord_phone)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (title, price, location, lng, lat, description, image, tags, risk_level, area, floor, orientation, landlord_name, landlord_phone)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         title,
         price,
         location,
+        lngVal,
+        latVal,
         description || '',
         image || '/images/houses/house-1.jpg',
         Array.isArray(tags) ? tags.join(',') : tags || '',

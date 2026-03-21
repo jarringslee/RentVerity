@@ -31,7 +31,10 @@
             </el-form-item>
 
             <el-form-item label="位置" prop="location">
-              <el-input v-model="form.location" placeholder="例如：西安市高新区xxx小区" />
+              <el-input
+                v-model="form.location"
+                placeholder="例如：西安市高新区xxx小区（将自动解析地图坐标）"
+              />
             </el-form-item>
 
             <el-form-item label="面积">
@@ -119,6 +122,7 @@
 
 <script setup lang="ts">
 import { reactive, ref, computed } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { publishHouse } from '../services/api'
@@ -152,6 +156,27 @@ const rules: FormRules = {
   location: [{ required: true, message: '请输入位置', trigger: 'blur' }]
 }
 
+function geocodeLocation(address: string): Promise<{ lng: number; lat: number } | null> {
+  return new Promise((resolve) => {
+    if (typeof BMapGL === 'undefined') {
+      resolve(null)
+      return
+    }
+    const geo = new BMapGL.Geocoder()
+    geo.getPoint(
+      address.trim(),
+      (point: { lng: number; lat: number } | null) => {
+        if (point && typeof point.lng === 'number' && typeof point.lat === 'number') {
+          resolve({ lng: point.lng, lat: point.lat })
+        } else {
+          resolve(null)
+        }
+      },
+      '西安市'
+    )
+  })
+}
+
 const handleSubmit = async () => {
   if (!isLoggedIn.value) {
     router.push('/login')
@@ -165,11 +190,19 @@ const handleSubmit = async () => {
 
     submitting.value = true
     try {
-      const res = await publishHouse(form)
+      const coords = await geocodeLocation(form.location)
+      if (!coords) {
+        ElMessage.warning('未能解析地址坐标，房源仍可发布，但地图页可能不显示该点')
+      }
+      const res = await publishHouse({
+        ...form,
+        lng: coords?.lng ?? null,
+        lat: coords?.lat ?? null
+      })
       if (res.success) {
         router.push('/houses')
       } else {
-        alert(res.message || '发布失败')
+        ElMessage.error((res as { message?: string }).message || '发布失败')
       }
     } finally {
       submitting.value = false
