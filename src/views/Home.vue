@@ -4,23 +4,7 @@
       <el-header class="header">
         <h1>安心租</h1>
         <div class="nav">
-          <el-dropdown v-if="isLoggedIn" @command="handleUserCommand">
-            <el-button type="primary">
-              {{ currentUser?.username
-              }}<el-icon class="el-icon--right"><arrow-down /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="profile">个人信息</el-dropdown-item>
-                <el-dropdown-item command="favorites"
-                  >我的收藏</el-dropdown-item
-                >
-                <el-dropdown-item divided command="logout"
-                  >退出登录</el-dropdown-item
-                >
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <HeaderUserMenu v-if="isLoggedIn" />
           <div v-else>
             <el-button type="primary" @click="$router.push('/login')"
               >登录</el-button
@@ -104,16 +88,14 @@
 <script setup lang="ts">
 import { reactive, ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { UploadFilled, ArrowDown } from "@element-plus/icons-vue";
+import { UploadFilled } from "@element-plus/icons-vue";
 import userStore from "../stores/userStore";
+import HeaderUserMenu from "../components/HeaderUserMenu.vue";
 
 const router = useRouter();
 
 // 检查用户是否已登录
 const isLoggedIn = computed(() => userStore.isLoggedIn());
-
-// 获取当前用户信息
-const currentUser = computed(() => userStore.currentUser.value);
 
 // 搜索表单数据
 const searchForm = reactive({
@@ -148,25 +130,6 @@ const analyzeRisk = () => {
   // 实际项目中这里会调用API进行风险分析
 };
 
-// 处理用户命令
-const handleUserCommand = (command: string) => {
-  switch (command) {
-    case "profile":
-      // 跳转到个人资料页面
-      router.push("/profile");
-      break;
-    case "favorites":
-      // 跳转到收藏房源页面
-      router.push("/favorites");
-      break;
-    case "logout":
-      // 退出登录
-      userStore.clearCurrentUser();
-      router.push("/");
-      break;
-  }
-};
-
 onMounted(() => {
   // 页面加载时检查用户登录状态
   console.log("用户登录状态:", isLoggedIn.value);
@@ -184,6 +147,12 @@ onMounted(() => {
   align-items: center;
   background-color: #409eff;
   color: white;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .nav button {

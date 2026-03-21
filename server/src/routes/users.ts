@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import fs from 'fs';
+import path from 'path';
+import multer, { MulterError } from 'multer';
 import { pool } from '../config/db';
 import { requireAuth } from '../middleware/auth';
+import { AVATARS_DIR, UPLOADS_ROOT } from '../config/paths';
 import {
   filterPreferenceKeys,
   parsePreferencesFromRow,
@@ -12,6 +16,30 @@ import {
 
 const router = Router();
 
+const avatarStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, AVATARS_DIR);
+  },
+  filename: (req, file, cb) => {
+    const userId = (req as { userId?: number }).userId ?? 0;
+    const ext = path.extname(file.originalname) || '.jpg';
+    const safeExt = /^\.(jpe?g|png|gif|webp)$/i.test(ext) ? ext.toLowerCase() : '.jpg';
+    cb(null, `${userId}-${Date.now()}${safeExt}`);
+  }
+});
+
+const uploadAvatar = multer({
+  storage: avatarStorage,
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(jpeg|png|gif|webp)$/i.test(file.mimetype)) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error('仅支持 jpg、png、gif、webp 图片'));
+  }
+});
+
 function publicUserFromRow(row: any) {
   return {
     id: row.id,
@@ -19,9 +47,24 @@ function publicUserFromRow(row: any) {
     phone: row.phone,
     gender: coerceGender(row.gender),
     city: row.city ?? null,
+    avatarUrl: row.avatar_url ?? null,
     preferences: parsePreferencesFromRow(row),
     createdAt: row.created_at
   };
+}
+
+function tryRemoveAvatarFile(avatarUrl: string | null | undefined) {
+  if (!avatarUrl || typeof avatarUrl !== 'string') return;
+  if (!avatarUrl.startsWith('/uploads/avatars/')) return;
+  const rel = avatarUrl.replace(/^\/uploads\//, '');
+  const abs = path.join(UPLOADS_ROOT, rel);
+  if (abs.startsWith(AVATARS_DIR) && fs.existsSync(abs)) {
+    try {
+      fs.unlinkSync(abs);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 // 获取当前登录用户信息
@@ -30,7 +73,7 @@ router.get('/me', requireAuth, async (req, res) => {
     const userId = (req as any).userId as number;
 
     const [rows] = await pool.query(
-      'SELECT id, username, phone, gender, city, preference, preferences_json, created_at FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, username, phone, gender, city, avatar_url, preference, preferences_json, created_at FROM users WHERE id = ? LIMIT 1',
       [userId]
     );
     const user = Array.isArray(rows) ? (rows[0] as any) : null;
@@ -48,10 +91,66 @@ router.get('/me', requireAuth, async (req, res) => {
     console.error(err);
     return res.status(500).json({
       success: false,
-      message: '获取用户信息失败（若提示未知列，请先执行 migrations/002_user_profile_extend.sql）'
+      message:
+        '获取用户信息失败（若提示未知列，请先执行 migrations/002_user_profile_extend.sql、003_user_avatar.sql）'
     });
   }
 });
+
+// 上传头像（multipart 字段名 avatar）
+router.post(
+  '/me/avatar',
+  requireAuth,
+  (req, res, next) => {
+    uploadAvatar.single('avatar')(req, res, (err: unknown) => {
+      if (err instanceof MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ success: false, message: '图片大小不能超过 2MB' });
+        }
+        return res.status(400).json({ success: false, message: err.message });
+      }
+      if (err) {
+        return res.status(400).json({ success: false, message: '仅支持 jpg、png、gif、webp 图片' });
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    try {
+      const userId = (req as { userId?: number }).userId as number;
+      const file = (req as { file?: { filename: string } }).file;
+      if (!file) {
+        return res.status(400).json({ success: false, message: '请选择图片文件' });
+      }
+
+      const relative = `/uploads/avatars/${file.filename}`;
+
+      const [curRows] = await pool.query(
+        'SELECT avatar_url FROM users WHERE id = ? LIMIT 1',
+        [userId]
+      );
+      const cur = Array.isArray(curRows) ? (curRows[0] as { avatar_url?: string | null }) : null;
+      tryRemoveAvatarFile(cur?.avatar_url ?? null);
+
+      await pool.query('UPDATE users SET avatar_url = ? WHERE id = ?', [relative, userId]);
+
+      const [afterRows] = await pool.query(
+        'SELECT id, username, phone, gender, city, avatar_url, preference, preferences_json, created_at FROM users WHERE id = ? LIMIT 1',
+        [userId]
+      );
+      const updated = Array.isArray(afterRows) ? (afterRows[0] as any) : null;
+
+      return res.json({
+        success: true,
+        message: '头像已更新',
+        data: publicUserFromRow(updated)
+      });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ success: false, message: '上传头像失败' });
+    }
+  }
+);
 
 // 修改基本资料：用户名、手机号、性别、城市、个人偏好（多选）
 router.patch('/me', requireAuth, async (req, res) => {
@@ -64,14 +163,15 @@ router.patch('/me', requireAuth, async (req, res) => {
       typeof body.phone === 'string' ||
       'gender' in body ||
       'city' in body ||
-      'preferences' in body;
+      'preferences' in body ||
+      'avatarUrl' in body;
 
     if (!has) {
       return res.status(400).json({ success: false, message: '请至少选择一项要修改的内容' });
     }
 
     const [currentRows] = await pool.query(
-      'SELECT id, username, phone, gender, city, preference, preferences_json FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, username, phone, gender, city, avatar_url, preference, preferences_json FROM users WHERE id = ? LIMIT 1',
       [userId]
     );
     const current = Array.isArray(currentRows) ? (currentRows[0] as any) : null;
@@ -86,6 +186,7 @@ router.patch('/me', requireAuth, async (req, res) => {
     let finalPrefs = parsePreferencesFromRow(current);
     let finalPrefsJson = serializePreferencesJson(finalPrefs);
     let finalLegacy = finalPrefs[0] || null;
+    let finalAvatarUrl: string | null = current.avatar_url ?? null;
 
     if (typeof body.username === 'string') {
       const u = body.username.trim();
@@ -153,13 +254,26 @@ router.patch('/me', requireAuth, async (req, res) => {
       finalLegacy = arr[0] || null;
     }
 
+    if ('avatarUrl' in body) {
+      const a = body.avatarUrl;
+      if (a === null || a === undefined || a === '') {
+        tryRemoveAvatarFile(finalAvatarUrl);
+        finalAvatarUrl = null;
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: '头像请通过上传接口修改；传 null 可恢复默认头像'
+        });
+      }
+    }
+
     await pool.query(
-      `UPDATE users SET username = ?, phone = ?, gender = ?, city = ?, preference = ?, preferences_json = ? WHERE id = ?`,
-      [finalUsername, finalPhone, finalGender, finalCity, finalLegacy, finalPrefsJson, userId]
+      `UPDATE users SET username = ?, phone = ?, gender = ?, city = ?, avatar_url = ?, preference = ?, preferences_json = ? WHERE id = ?`,
+      [finalUsername, finalPhone, finalGender, finalCity, finalAvatarUrl, finalLegacy, finalPrefsJson, userId]
     );
 
     const [afterRows] = await pool.query(
-      'SELECT id, username, phone, gender, city, preference, preferences_json, created_at FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, username, phone, gender, city, avatar_url, preference, preferences_json, created_at FROM users WHERE id = ? LIMIT 1',
       [userId]
     );
     const updated = Array.isArray(afterRows) ? (afterRows[0] as any) : null;

@@ -3,8 +3,9 @@
     <el-container class="full-height">
       <el-header class="header">
         <h1>发布房源</h1>
-        <div>
+        <div class="nav">
           <el-button @click="$router.go(-1)">返回</el-button>
+          <HeaderUserMenu v-if="isLoggedIn" />
         </div>
       </el-header>
 
@@ -122,6 +123,7 @@ import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
 import { publishHouse } from '../services/api'
 import userStore from '../stores/userStore'
+import HeaderUserMenu from '../components/HeaderUserMenu.vue'
 
 const router = useRouter()
 const formRef = ref<FormInstance>()
@@ -187,6 +189,12 @@ const handleSubmit = async () => {
   align-items: center;
   background-color: #409eff;
   color: white;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .form-card {

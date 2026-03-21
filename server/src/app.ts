@@ -1,7 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import { pool } from './config/db';
+import { UPLOADS_ROOT } from './config/paths';
 import authRouter from './routes/auth';
 import housesRouter from './routes/houses';
 import favoritesRouter from './routes/favorites';
@@ -11,8 +13,12 @@ dotenv.config();
 
 const app = express();
 
+fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
+fs.mkdirSync(`${UPLOADS_ROOT}/avatars`, { recursive: true });
+
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(UPLOADS_ROOT));
 
 // 健康检查
 app.get('/health', (req, res) => {

@@ -369,18 +369,34 @@ export const fetchUserProfile = async () => {
   return request('/users/me')
 }
 
-// 更新基本资料（需登录）：用户名、手机号、性别、城市、个人偏好（多选）
+// 更新基本资料（需登录）：用户名、手机号、性别、城市、个人偏好（多选）；avatarUrl 传 null 表示恢复默认头像
 export const updateUserProfile = async (payload: {
   username?: string
   phone?: string
   gender?: 'male' | 'female'
   city?: string | null
   preferences?: string[]
+  avatarUrl?: string | null
 }) => {
   return request('/users/me', {
     method: 'PATCH',
     body: JSON.stringify(payload)
   })
+}
+
+/** 上传头像（multipart 字段 avatar）；可用 tokenOverride 在注册成功后立即上传 */
+export const uploadUserAvatar = async (file: File, tokenOverride?: string | null) => {
+  const token = tokenOverride ?? userStore.getToken?.()
+  const form = new FormData()
+  form.append('avatar', file)
+  const headers: Record<string, string> = {}
+  if (token) headers.Authorization = `Bearer ${token}`
+  const res = await fetch(`${API_BASE_URL}/users/me/avatar`, {
+    method: 'POST',
+    headers,
+    body: form
+  })
+  return res.json()
 }
 
 // 修改密码：需原密码；后端校验新密码不可与旧密码相同（需登录）

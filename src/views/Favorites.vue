@@ -3,8 +3,9 @@
     <el-container class="full-height">
       <el-header class="header">
         <h1>我的收藏</h1>
-        <div>
+        <div class="nav">
           <el-button @click="$router.go(-1)">返回</el-button>
+          <HeaderUserMenu v-if="isLoggedIn" />
         </div>
       </el-header>
       
@@ -47,12 +48,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { getUserFavorites, removeFavorite } from '../services/api'
 import userStore from '../stores/userStore'
+import HeaderUserMenu from '../components/HeaderUserMenu.vue'
 
 const router = useRouter()
+const isLoggedIn = computed(() => userStore.isLoggedIn())
 const favorites = ref<any[]>([])
 
 // 处理图片加载错误
@@ -103,6 +106,12 @@ onMounted(() => {
   align-items: center;
   background-color: #409eff;
   color: white;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .house-item {

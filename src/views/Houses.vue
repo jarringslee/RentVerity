@@ -22,23 +22,7 @@
             style="margin-right: 10px"
             >房源对比</el-button
           >
-          <el-dropdown v-if="isLoggedIn" @command="handleUserCommand">
-            <el-button type="primary">
-              {{ currentUser?.username
-              }}<el-icon class="el-icon--right"><arrow-down /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="profile">个人信息</el-dropdown-item>
-                <el-dropdown-item command="favorites"
-                  >我的收藏</el-dropdown-item
-                >
-                <el-dropdown-item divided command="logout"
-                  >退出登录</el-dropdown-item
-                >
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <HeaderUserMenu v-if="isLoggedIn" />
           <div v-else>
             <el-button type="primary" @click="$router.push('/login')"
               >登录</el-button
@@ -249,34 +233,12 @@ import { reactive, ref, onMounted, computed } from "vue";
 import { useRouter } from "vue-router";
 import { getHouseList, searchHouses, getUserFavorites } from "../services/api";
 import userStore from "../stores/userStore";
-import { ArrowDown } from "@element-plus/icons-vue";
+import HeaderUserMenu from "../components/HeaderUserMenu.vue";
 
 const router = useRouter();
 
 // 检查用户是否已登录
 const isLoggedIn = computed(() => userStore.isLoggedIn());
-
-// 获取当前用户信息
-const currentUser = computed(() => userStore.currentUser.value);
-
-// 处理用户命令
-const handleUserCommand = (command: string) => {
-  switch (command) {
-    case "profile":
-      // 跳转到个人资料页面
-      router.push("/profile");
-      break;
-    case "favorites":
-      // 跳转到收藏房源页面
-      router.push("/favorites");
-      break;
-    case "logout":
-      // 退出登录
-      userStore.clearCurrentUser();
-      router.push("/");
-      break;
-  }
-};
 
 // 搜索关键词
 const searchKeyword = computed({
@@ -558,6 +520,13 @@ onMounted(async () => {
   position: sticky;
   top: 0;
   z-index: 100;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .filter-card {

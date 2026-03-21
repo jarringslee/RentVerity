@@ -3,7 +3,10 @@
     <el-container class="full-height">
       <el-header class="header">
         <h1>在线沟通</h1>
-        <el-button @click="$router.go(-1)">返回</el-button>
+        <div class="nav">
+          <el-button @click="$router.go(-1)">返回</el-button>
+          <HeaderUserMenu v-if="isLoggedIn" />
+        </div>
       </el-header>
       
       <el-main>
@@ -80,6 +83,10 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { getMessages, sendMessage } from '../services/api'
 import { ElInput } from 'element-plus'
+import userStore from '../stores/userStore'
+import HeaderUserMenu from '../components/HeaderUserMenu.vue'
+
+const isLoggedIn = computed(() => userStore.isLoggedIn())
 
 // 当前激活的联系人
 const activeContact = ref(1)
@@ -181,6 +188,12 @@ onMounted(() => {
   align-items: center;
   background-color: #409eff;
   color: white;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .contacts-card, .chat-card {

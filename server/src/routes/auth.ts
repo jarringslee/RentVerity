@@ -24,6 +24,7 @@ function publicUserFromRow(row: any) {
     phone: row.phone,
     gender: coerceGender(row.gender),
     city: row.city ?? null,
+    avatarUrl: row.avatar_url ?? null,
     preferences: parsePreferencesFromRow(row)
   };
 }
@@ -77,8 +78,8 @@ router.post('/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
 
     const [result] = await pool.query(
-      `INSERT INTO users (username, phone, password_hash, preference, gender, city, preferences_json) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO users (username, phone, password_hash, preference, gender, city, preferences_json, avatar_url) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
       [username, phone, passwordHash, legacyPreference, genderVal, cityVal, preferencesJson]
     );
 
@@ -101,6 +102,7 @@ router.post('/register', async (req, res) => {
         gender: genderVal,
         city: cityVal,
         preferences: filteredPrefs,
+        avatarUrl: null,
         token
       }
     });
@@ -108,7 +110,8 @@ router.post('/register', async (req, res) => {
     console.error(err);
     return res.status(500).json({
       success: false,
-      message: '注册失败，服务器错误（若提示未知列，请先执行 migrations/002_user_profile_extend.sql）'
+      message:
+        '注册失败，服务器错误（若提示未知列，请执行 migrations/002_user_profile_extend.sql、003_user_avatar.sql）'
     });
   }
 });
@@ -123,7 +126,7 @@ router.post('/login', async (req, res) => {
     }
 
     const [rows] = await pool.query(
-      'SELECT id, username, phone, password_hash, preference, gender, city, preferences_json FROM users WHERE username = ? LIMIT 1',
+      'SELECT id, username, phone, password_hash, preference, gender, city, preferences_json, avatar_url FROM users WHERE username = ? LIMIT 1',
       [username]
     );
 

@@ -3,8 +3,9 @@
     <el-container class="full-height">
       <el-header class="header">
         <h1>房源对比</h1>
-        <div>
+        <div class="nav">
           <el-button @click="$router.go(-1)">返回</el-button>
+          <HeaderUserMenu v-if="isLoggedIn" />
         </div>
       </el-header>
       
@@ -100,6 +101,7 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { getHouseDetail, getUserFavorites } from '../services/api'
 import userStore from '../stores/userStore'
+import HeaderUserMenu from '../components/HeaderUserMenu.vue'
 
 const router = useRouter()
 const loading = ref(false)
@@ -238,6 +240,12 @@ onMounted(() => {
   align-items: center;
   background-color: #409eff;
   color: white;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 /* 响应式设计 */

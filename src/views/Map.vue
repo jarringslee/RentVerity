@@ -3,7 +3,10 @@
     <el-container class="full-height">
       <el-header class="header">
         <h1>地图找房</h1>
-        <el-button @click="$router.push('/')">返回主页</el-button>
+        <div class="nav">
+          <el-button @click="$router.push('/')">返回主页</el-button>
+          <HeaderUserMenu v-if="isLoggedIn" />
+        </div>
       </el-header>
       
       <el-main>
@@ -61,12 +64,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { getHouseList } from '../services/api'
 import { Search } from '@element-plus/icons-vue'
+import userStore from '../stores/userStore'
+import HeaderUserMenu from '../components/HeaderUserMenu.vue'
 
 const router = useRouter()
+const isLoggedIn = computed(() => userStore.isLoggedIn())
 
 // 搜索关键词
 const searchKeyword = ref('西安')
@@ -215,6 +221,12 @@ onMounted(() => {
   align-items: center;
   background-color: #409eff;
   color: white;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .map-wrapper {

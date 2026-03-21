@@ -3,7 +3,8 @@
     <el-container class="full-height">
       <el-header class="header">
         <h1>房源详情</h1>
-        <div>
+        <div class="nav">
+          <HeaderUserMenu v-if="isLoggedIn" />
           <el-button @click="goBack">返回</el-button>
           <el-button 
             v-if="isLoggedIn"
@@ -94,6 +95,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getHouseDetail, isFavorite, addFavorite, removeFavorite } from '../services/api'
 import userStore from '../stores/userStore'
+import HeaderUserMenu from '../components/HeaderUserMenu.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -228,6 +230,13 @@ onMounted(() => {
   align-items: center;
   background-color: #409eff;
   color: white;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .carousel-image {

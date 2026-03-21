@@ -50,6 +50,26 @@
           </el-radio-group>
         </el-form-item>
 
+        <el-form-item label="头像">
+          <div class="register-avatar-row">
+            <UserAvatar :avatar-url="avatarPreviewUrl" :size="72" />
+            <div class="register-avatar-actions">
+              <el-upload
+                :auto-upload="false"
+                :show-file-list="false"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                :on-change="onRegisterAvatarChange"
+              >
+                <el-button type="primary">选择头像</el-button>
+              </el-upload>
+              <el-button v-if="avatarFile" link type="danger" @click="clearRegisterAvatar">
+                移除
+              </el-button>
+            </div>
+          </div>
+          <div class="avatar-hint">可选；不上传则使用默认头像</div>
+        </el-form-item>
+
         <el-form-item label="地区">
           <el-cascader
             v-model="regionCodes"
@@ -89,10 +109,12 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { reactive, ref, computed, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import type { FormInstance } from 'element-plus'
-import { register } from '../services/api'
+import type { FormInstance, UploadFile } from 'element-plus'
+import { ElMessage } from 'element-plus'
+import { register, uploadUserAvatar } from '../services/api'
+import UserAvatar from '../components/UserAvatar.vue'
 import { PERSONAL_PREFERENCE_OPTIONS } from '../constants/userPreferences'
 import {
   provinceAndCityData,
@@ -103,6 +125,29 @@ const router = useRouter()
 const registerFormRef = ref<FormInstance>()
 /** 省市区级联 value，与 element-china-area-data 一致 */
 const regionCodes = ref<string[]>([])
+
+const avatarFile = ref<File | null>(null)
+const avatarObjectUrl = ref('')
+
+const avatarPreviewUrl = computed(() => avatarObjectUrl.value || null)
+
+function onRegisterAvatarChange(uploadFile: UploadFile) {
+  const raw = uploadFile.raw
+  if (!raw) return
+  if (avatarObjectUrl.value) URL.revokeObjectURL(avatarObjectUrl.value)
+  avatarFile.value = raw
+  avatarObjectUrl.value = URL.createObjectURL(raw)
+}
+
+function clearRegisterAvatar() {
+  if (avatarObjectUrl.value) URL.revokeObjectURL(avatarObjectUrl.value)
+  avatarObjectUrl.value = ''
+  avatarFile.value = null
+}
+
+onUnmounted(() => {
+  if (avatarObjectUrl.value) URL.revokeObjectURL(avatarObjectUrl.value)
+})
 
 const registerForm = reactive({
   username: '',
@@ -157,9 +202,22 @@ const handleRegister = async () => {
       city: cityLabelFromCodes(regionCodes.value) || null
     })
     if (res.success) {
+      const data = res.data as { token?: string } | undefined
+      if (avatarFile.value && data?.token) {
+        const up = (await uploadUserAvatar(avatarFile.value, data.token)) as {
+          success?: boolean
+          message?: string
+        }
+        if (!up.success) {
+          ElMessage.warning(
+            up.message || '头像上传失败，可登录后在个人资料中重新上传'
+          )
+        }
+      }
+      ElMessage.success('注册成功，请登录')
       router.push('/login')
     } else {
-      alert(res.message)
+      ElMessage.error((res as { message?: string }).message || '注册失败')
     }
   })
 }
@@ -193,5 +251,25 @@ const handleRegister = async () => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.register-avatar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.register-avatar-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.avatar-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #909399;
 }
 </style>

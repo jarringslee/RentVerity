@@ -13,9 +13,15 @@
           <el-card class="main-card" shadow="hover">
             <template #header>
               <div class="card-header-row">
-                <span class="card-title">{{
-                  isEditingBasic ? '编辑基本资料' : '个人信息'
-                }}</span>
+                <div class="title-with-avatar">
+                  <span class="card-title">{{
+                    isEditingBasic ? '编辑基本资料' : '个人信息'
+                  }}</span>
+                  <UserAvatar
+                    :avatar-url="currentUser?.avatarUrl"
+                    :size="56"
+                  />
+                </div>
                 <div class="card-header-actions">
                   <template v-if="!isEditingBasic">
                     <el-button type="primary" @click="enterEditBasic">
@@ -42,7 +48,7 @@
                   genderDisplay
                 }}</el-descriptions-item>
                 <el-descriptions-item label="地区">{{
-                  cityDisplay
+                  regionDisplay
                 }}</el-descriptions-item>
                 <el-descriptions-item label="注册时间">{{
                   formattedCreatedAt
@@ -94,16 +100,66 @@
                     <el-radio label="female">女</el-radio>
                   </el-radio-group>
                 </el-form-item>
+                <el-form-item label="头像">
+                  <div class="avatar-edit-row">
+                    <UserAvatar
+                      :avatar-url="currentUser?.avatarUrl"
+                      :size="72"
+                    />
+                    <div class="avatar-edit-actions">
+                      <el-upload
+                        :show-file-list="false"
+                        accept="image/jpeg,image/png,image/gif,image/webp"
+                        :http-request="submitAvatarUpload"
+                      >
+                        <el-button type="primary">上传新头像</el-button>
+                      </el-upload>
+                      <el-button
+                        v-if="hasCustomAvatar"
+                        :loading="avatarResetting"
+                        @click="resetAvatarToDefault"
+                      >
+                        恢复默认头像
+                      </el-button>
+                    </div>
+                  </div>
+                  <div class="avatar-form-tip">
+                    支持 jpg / png / gif / webp，不超过 2MB
+                  </div>
+                </el-form-item>
                 <el-form-item label="地区">
-                  <el-cascader
-                    v-model="regionCodes"
-                    :options="provinceAndCityData"
-                    :props="{ expandTrigger: 'hover' }"
-                    placeholder="请先选省，再选市（区）"
-                    filterable
-                    clearable
-                    style="width: 100%"
-                  />
+                  <div class="region-select-row">
+                    <el-select
+                      v-model="regionProvinceCode"
+                      placeholder="请选择省 / 直辖市"
+                      filterable
+                      clearable
+                      class="region-select"
+                      @change="onRegionProvinceChange"
+                    >
+                      <el-option
+                        v-for="p in provinceSelectOptions"
+                        :key="p.value"
+                        :label="p.label"
+                        :value="p.value"
+                      />
+                    </el-select>
+                    <el-select
+                      v-model="regionCityCode"
+                      placeholder="请选择市（区）"
+                      filterable
+                      clearable
+                      class="region-select"
+                      :disabled="!regionProvinceCode"
+                    >
+                      <el-option
+                        v-for="c in citySelectOptions"
+                        :key="c.value"
+                        :label="c.label"
+                        :value="c.value"
+                      />
+                    </el-select>
+                  </div>
                 </el-form-item>
                 <el-form-item label="个人偏好">
                   <el-checkbox-group
@@ -204,18 +260,21 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import type { FormInstance, FormRules } from 'element-plus'
+import type { FormInstance, FormRules, UploadRequestOptions } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import userStore from '../stores/userStore'
 import {
   fetchUserProfile,
   updateUserProfile,
-  changeUserPassword
+  changeUserPassword,
+  uploadUserAvatar
 } from '../services/api'
+import UserAvatar from '../components/UserAvatar.vue'
 import {
   provinceAndCityData,
   cityLabelFromCodes,
-  findRegionCodesByCityLabel
+  findRegionCodesByCityLabel,
+  formatRegionDisplay
 } from '../utils/chinaRegion'
 import {
   PERSONAL_PREFERENCE_OPTIONS,
@@ -227,6 +286,7 @@ const router = useRouter()
 const pageLoading = ref(false)
 const basicSaving = ref(false)
 const pwdSaving = ref(false)
+const avatarResetting = ref(false)
 
 const isEditingBasic = ref(false)
 const showPasswordSection = ref(false)
@@ -234,10 +294,40 @@ const showPasswordSection = ref(false)
 const basicFormRef = ref<FormInstance>()
 const pwdFormRef = ref<FormInstance>()
 
-/** 编辑资料时省→市（区）级联 */
-const regionCodes = ref<string[]>([])
+/** 编辑资料：省 / 市（区）两个下拉 */
+const regionProvinceCode = ref('')
+const regionCityCode = ref('')
+
+const provinceSelectOptions = computed(() =>
+  provinceAndCityData.map((p) => ({ value: p.value, label: p.label }))
+)
+
+const citySelectOptions = computed(() => {
+  if (!regionProvinceCode.value) return []
+  const prov = provinceAndCityData.find((p) => p.value === regionProvinceCode.value)
+  return (prov?.children ?? []).map((c) => ({
+    value: c.value,
+    label: c.label
+  }))
+})
+
+function onRegionProvinceChange() {
+  const p = regionProvinceCode.value
+  if (!p) {
+    regionCityCode.value = ''
+    return
+  }
+  const prov = provinceAndCityData.find((x) => x.value === p)
+  const first = prov?.children?.[0]
+  regionCityCode.value = first?.value ?? ''
+}
 
 const currentUser = computed(() => userStore.currentUser.value)
+
+const hasCustomAvatar = computed(() => {
+  const u = currentUser.value?.avatarUrl
+  return !!(u && String(u).trim())
+})
 
 const serverCreatedAt = ref<string | null>(null)
 
@@ -266,10 +356,10 @@ const genderDisplay = computed(() => {
   return '男'
 })
 
-const cityDisplay = computed(() => {
+const regionDisplay = computed(() => {
   const c = currentUser.value?.city
-  if (c && String(c).trim()) return c
-  return '暂无'
+  const text = formatRegionDisplay(c)
+  return text || '暂无'
 })
 
 const formattedCreatedAt = computed(() => {
@@ -352,9 +442,16 @@ const syncBasicFormFromStore = () => {
   basicForm.username = u.username || ''
   basicForm.phone = u.phone || ''
   basicForm.gender = u.gender === 'female' ? 'female' : 'male'
-  regionCodes.value = findRegionCodesByCityLabel(
+  const codes = findRegionCodesByCityLabel(
     u.city && String(u.city).trim() ? String(u.city).trim() : ''
   )
+  if (codes.length >= 2) {
+    regionProvinceCode.value = codes[0]
+    regionCityCode.value = codes[1]
+  } else {
+    regionProvinceCode.value = ''
+    regionCityCode.value = ''
+  }
   basicForm.preferences = prefsFromUser()
 }
 
@@ -390,9 +487,45 @@ const mergeProfileToStore = (data: Record<string, unknown>) => {
     phone: data.phone,
     gender: data.gender === 'female' ? 'female' : 'male',
     city: data.city ?? null,
+    avatarUrl: (data.avatarUrl as string | null | undefined) ?? null,
     preferences: Array.isArray(data.preferences) ? data.preferences : [],
     ...(token ? { token } : {})
   })
+}
+
+const submitAvatarUpload = async (opt: UploadRequestOptions) => {
+  try {
+    const res = (await uploadUserAvatar(opt.file as File)) as {
+      success?: boolean
+      message?: string
+      data?: Record<string, unknown>
+    }
+    if (res.success && res.data) {
+      mergeProfileToStore(res.data)
+      ElMessage.success(res.message || '头像已更新')
+      opt.onSuccess?.(res as any)
+    } else {
+      ElMessage.error(res.message || '上传失败')
+      opt.onError?.(new Error(res.message || 'fail') as any)
+    }
+  } catch (e: any) {
+    opt.onError?.(e)
+  }
+}
+
+const resetAvatarToDefault = async () => {
+  avatarResetting.value = true
+  try {
+    const res = await updateUserProfile({ avatarUrl: null })
+    if (res.success && res.data) {
+      mergeProfileToStore(res.data as Record<string, unknown>)
+      ElMessage.success('已恢复默认头像')
+    } else {
+      ElMessage.error(res.message || '操作失败')
+    }
+  } finally {
+    avatarResetting.value = false
+  }
 }
 
 const loadProfile = async () => {
@@ -425,7 +558,9 @@ const submitBasic = async () => {
         username: basicForm.username.trim(),
         phone: basicForm.phone.trim(),
         gender: basicForm.gender,
-        city: cityLabelFromCodes(regionCodes.value) || null,
+        city:
+          cityLabelFromCodes([regionProvinceCode.value, regionCityCode.value]) ||
+          null,
         preferences: [...basicForm.preferences]
       })
       if (res.success && res.data) {
@@ -516,6 +651,32 @@ onMounted(() => {
   font-weight: 600;
 }
 
+.title-with-avatar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.avatar-edit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.avatar-edit-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.avatar-form-tip {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #909399;
+}
+
 .view-section {
   padding-top: 4px;
 }
@@ -551,5 +712,17 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.region-select-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+
+.region-select {
+  flex: 1;
+  min-width: 140px;
 }
 </style>
