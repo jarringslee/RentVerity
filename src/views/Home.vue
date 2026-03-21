@@ -204,7 +204,6 @@ onMounted(() => {
 
 .feature-card {
   text-align: center;
-  /* margin-top: 10px; */
   background-color: aliceblue;
   cursor: pointer;
   transition: all 0.3s ease;

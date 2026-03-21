@@ -49,8 +49,8 @@
       </el-header>
 
       <el-main class="main-content">
-        <div style="height: 100%">
-          <el-row :gutter="20" style="height: 100%">
+        <div class="houses-inner">
+          <el-row :gutter="20" class="houses-row">
             <!-- 筛选栏 -->
             <el-col :span="24" :md="6" class="filter-sidebar">
               <el-card class="filter-card">
@@ -461,15 +461,33 @@ onMounted(async () => {
 
 .main-content {
   height: calc(100vh - 60px); /* 减去 header 的高度 */
+  overflow: hidden; /* 去掉与列表区重复的外层竖向滚动条 */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.houses-inner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.houses-row {
+  flex: 1;
+  min-height: 0;
 }
 
 .filter-sidebar {
   height: 100%;
+  min-height: 0;
   overflow-y: auto;
 }
 
 .house-list-container {
   height: 100%;
+  min-height: 0;
   display: flex;
 }
 
@@ -478,6 +496,7 @@ onMounted(async () => {
   flex-direction: column;
   width: 100%;
   height: 100%;
+  min-height: 0;
 }
 
 .pagination-top,
@@ -502,11 +521,19 @@ onMounted(async () => {
 
 .house-list-content {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
+/* 避免 el-card 撑满高度后再叠一层滚动，只保留列表区域滚动 */
 .house-list-card {
-  height: 100%;
+  height: auto;
+  max-height: none;
+}
+
+.house-list-card :deep(.el-card__body) {
+  overflow: visible;
 }
 
 .house-list {
@@ -608,6 +635,9 @@ onMounted(async () => {
 
   .main-content {
     height: auto;
+    overflow: visible;
+    display: block;
+    min-height: 0;
   }
 
   .filter-sidebar,
