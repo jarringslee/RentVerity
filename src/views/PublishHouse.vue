@@ -24,7 +24,8 @@
             <el-form-item label="价格" prop="price">
               <el-input-number
                 v-model="form.price"
-                :min="0"
+                :min="1"
+                :precision="0"
                 :step="100"
                 style="width: 100%"
               />
@@ -42,6 +43,7 @@
                 v-model="form.area"
                 :min="0"
                 :step="5"
+                :precision="0"
                 style="width: 100%"
                 placeholder="平方米"
               />
@@ -55,13 +57,7 @@
               <el-input v-model="form.orientation" placeholder="例如：朝南、南北通透" />
             </el-form-item>
 
-            <el-form-item label="风险等级">
-              <el-select v-model="form.riskLevel" placeholder="请选择风险等级">
-                <el-option label="低风险" value="low" />
-                <el-option label="中风险" value="medium" />
-                <el-option label="高风险" value="high" />
-              </el-select>
-            </el-form-item>
+            <el-alert title="平台不提供房源风险评分或资质认证；合同风险请使用独立合同分析功能。" type="info" :closable="false" style="margin-bottom: 16px" />
 
             <el-form-item label="标签">
               <el-select
@@ -137,12 +133,11 @@ const isLoggedIn = computed(() => userStore.isLoggedIn())
 
 const form = reactive({
   title: '',
-  price: 0,
+  price: 1000,
   location: '',
   description: '',
   image: '',
   tags: [] as string[],
-  riskLevel: 'low',
   area: undefined as number | undefined,
   floor: '',
   orientation: '',
@@ -158,8 +153,11 @@ const rules: FormRules = {
 
 function geocodeLocation(address: string): Promise<{ lng: number; lat: number } | null> {
   return new Promise((resolve) => {
+    // SDK 回调未返回也不能永久卡住发布；超时后不伪造坐标。
+    const timer = setTimeout(() => resolve(null), 5000)
+    const finish = (point: { lng: number; lat: number } | null) => { clearTimeout(timer); resolve(point) }
     if (typeof BMapGL === 'undefined') {
-      resolve(null)
+      finish(null)
       return
     }
     const geo = new BMapGL.Geocoder()
@@ -167,9 +165,9 @@ function geocodeLocation(address: string): Promise<{ lng: number; lat: number } 
       address.trim(),
       (point: { lng: number; lat: number } | null) => {
         if (point && typeof point.lng === 'number' && typeof point.lat === 'number') {
-          resolve({ lng: point.lng, lat: point.lat })
+          finish({ lng: point.lng, lat: point.lat })
         } else {
-          resolve(null)
+          finish(null)
         }
       },
       '西安市'
@@ -183,7 +181,7 @@ const handleSubmit = async () => {
     return
   }
 
-  if (!formRef.value) return
+  if (!formRef.value || submitting.value) return
 
   await formRef.value.validate(async valid => {
     if (!valid) return
@@ -204,6 +202,8 @@ const handleSubmit = async () => {
       } else {
         ElMessage.error((res as { message?: string }).message || '发布失败')
       }
+    } catch (error) {
+      ElMessage.error(error instanceof Error ? error.message : '发布失败，请重试')
     } finally {
       submitting.value = false
     }
@@ -217,12 +217,18 @@ const handleSubmit = async () => {
 }
 
 .header {
+  height: auto;
+  min-height: 60px;
+  padding: 12px 20px;
+  gap: 12px;
+  flex-wrap: wrap;
   display: flex;
   justify-content: space-between;
   align-items: center;
   background-color: #409eff;
   color: white;
 }
+.header h1 { font-size: 24px; line-height: 1.3; margin: 0; }
 
 .nav {
   display: flex;

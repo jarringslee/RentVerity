@@ -61,9 +61,11 @@ npm install
 npm run dev
 ```
 
-服务端先读取 `server/.env`，再读取本地覆盖文件 `server/.env.local`。在后者填写 `AI_API_KEY`，不与另一项目混用，修改后重启服务端；配置示例和接口见 [服务端说明](server/README.md)。`JWT_SECRET` 必须配置，不再使用固定默认密钥。
+服务端配置优先级为显式进程环境 → `server/.env.local` → `server/.env`。在本地覆盖文件填写 `AI_API_KEY`，不与另一项目混用，修改后重启服务端；配置示例和接口见 [服务端说明](server/README.md)。`JWT_SECRET` 必须配置，不再使用固定默认密钥。
 
-前端 API 默认地址为 `http://localhost:3001`，可通过 `VITE_API_BASE_URL` 覆盖。当前仓库尚缺基础建表和 seed，只有 002—006 增量迁移，首次启动仍需已有数据库结构。
+前端 API 默认地址为 `http://localhost:3001`，可通过 `VITE_API_BASE_URL` 覆盖。新环境的完整 schema、受保护的初始化/演示 seed 命令及启动步骤见 [数据库说明](server/database/README.md)；新快照已合并 002—006，不重复运行旧迁移，不自动操作现有数据库。
+
+发布租金、坐标、图片地址和联系方式等由服务端校验，归属只取登录身份。房源不提供风险评分，旧 risk_level 仅为兼容历史表保留，不再作为默认“低风险”展示。聊天室是独立真人会话，支持基础消息持久化、未读/已读与手动重连，不声称具备自动重连、可靠重投或完整即时通信能力。
 
 ## 验证命令
 
@@ -71,6 +73,8 @@ npm run dev
 - `server/`：`npm test`（构建、PDF/证据、筛选/助手/接口与本地模型协议测试，不调用真实 DeepSeek 或业务数据库）。
 - `server/`：`npm run smoke:contract`（显式调用真实模型一次，仅发送合成合同，不使用私人文件）。
 - `server/`：`npm run smoke:assistant`（显式调用真实模型五次，并只读查询当前数据库；固定场景不代表普遍准确率）。
+- `server/`：`npm run smoke:business`（创建/清理独立临时 MySQL 测试库，测试完整基础业务；不写现有业务库或调用模型；权限不足时可显式提供空测试库，见数据库说明）。
+- 源码根：`npm run check:sensitive`（提交前检查被跟踪的环境文件/上传文件/私钥路径，不读取秘密、不操作 Git 索引）。
 
 开发记录与真实模型验收状态统一保存在外层 `开发记录.md`，下一步见实施路线。PDF worker 与字体/CMap 资源随构建本地提供，不依赖浏览器向第三方 CDN 获取合同解析资源。
 

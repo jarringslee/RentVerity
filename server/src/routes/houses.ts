@@ -1,9 +1,11 @@
+import { logSafeError } from '../utils/logSafeError';
 import { Router } from 'express';
 import { pool } from '../config/db';
 import { requireAuth } from '../middleware/auth';
 import { parseHouseQuery } from '../houses/filters';
 import { houseRepository, type HouseRepository } from '../houses/repository';
 import { AppError } from '../utils/AppError';
+import { positiveId, publishSchema, parseInput } from '../utils/validation';
 
 export function createHousesRouter(repository: HouseRepository = houseRepository) {
 const router = Router();
@@ -21,7 +23,7 @@ router.get('/', async (req, res) => {
     });
   } catch (err) {
     if (err instanceof AppError) return res.status(err.status).json({ success: false, code: err.code, message: err.message });
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '获取房源列表失败' });
   }
 });
@@ -29,7 +31,7 @@ router.get('/', async (req, res) => {
 // 根据ID获取房源详情
 router.get('/:id', async (req, res) => {
   try {
-    const id = Number(req.params.id);
+    const id = positiveId(req.params.id);
     if (!id) {
       return res.status(400).json({ success: false, message: '无效的房源ID' });
     }
@@ -47,7 +49,7 @@ router.get('/:id', async (req, res) => {
       data: house
     });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '获取房源详情失败' });
   }
 });
@@ -65,13 +67,12 @@ router.post('/', requireAuth, async (req, res) => {
       description,
       image,
       tags,
-      riskLevel,
       area,
       floor,
       orientation,
       landlordName,
       landlordPhone
-    } = req.body;
+    } = parseInput(publishSchema, req.body, '房源字段无效：租金和面积须为正整数，标题和位置必填；请检查坐标、标签、图片地址及联系方式。');
 
     if (!title || !price || !location) {
       return res.status(400).json({
@@ -80,20 +81,14 @@ router.post('/', requireAuth, async (req, res) => {
       });
     }
 
-    let lngVal: number | null = lng === undefined || lng === null || lng === '' ? null : Number(lng);
-    let latVal: number | null = lat === undefined || lat === null || lat === '' ? null : Number(lat);
-    if (lngVal !== null && (Number.isNaN(lngVal) || lngVal < 70 || lngVal > 140)) lngVal = null;
-    if (latVal !== null && (Number.isNaN(latVal) || latVal < 10 || latVal > 55)) latVal = null;
-    if ((lngVal === null) !== (latVal === null)) {
-      lngVal = null;
-      latVal = null;
-    }
+    const lngVal = lng ?? null;
+    const latVal = lat ?? null;
 
     const [result] = await pool.query(
       `
       INSERT INTO houses 
-      (title, price, location, lng, lat, description, image, tags, risk_level, area, floor, orientation, landlord_name, landlord_phone, owner_user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (title, price, location, lng, lat, description, image, tags, area, floor, orientation, landlord_name, landlord_phone, owner_user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         title,
@@ -104,7 +99,6 @@ router.post('/', requireAuth, async (req, res) => {
         description || '',
         image || '/images/houses/house-1.jpg',
         Array.isArray(tags) ? tags.join(',') : tags || '',
-        riskLevel || 'low',
         area || null,
         floor || '',
         orientation || '',
@@ -122,7 +116,8 @@ router.post('/', requireAuth, async (req, res) => {
       data: { id: insertResult.insertId }
     });
   } catch (err) {
-    console.error(err);
+    if (err instanceof AppError) return res.status(err.status).json({ success: false, code: err.code, message: err.message });
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '发布房源失败' });
   }
 });

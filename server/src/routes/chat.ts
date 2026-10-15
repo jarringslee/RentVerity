@@ -1,6 +1,8 @@
+import { logSafeError } from '../utils/logSafeError';
 import { Router } from 'express';
 import { pool } from '../config/db';
 import { requireAuth } from '../middleware/auth';
+import { positiveId } from '../utils/validation';
 
 const router = Router();
 
@@ -14,8 +16,8 @@ function normalizePair(me: number, peer: number) {
 router.post('/conversations', requireAuth, async (req, res) => {
   try {
     const me = (req as any).userId as number;
-    const peerUserId = Number((req.body as { peerUserId?: number }).peerUserId);
-    const houseIdRaw = (req.body as { houseId?: number | null | string }).houseId;
+    const peerUserId = positiveId(req.body?.peerUserId);
+    const houseIdRaw = req.body?.houseId;
 
     if (!peerUserId || Number.isNaN(peerUserId) || peerUserId === me) {
       return res.status(400).json({ success: false, message: '无效的对方用户' });
@@ -30,8 +32,8 @@ router.post('/conversations', requireAuth, async (req, res) => {
     let houseIdKey = 0;
 
     if (houseIdRaw !== undefined && houseIdRaw !== null && houseIdRaw !== '') {
-      houseId = Number(houseIdRaw);
-      if (Number.isNaN(houseId)) {
+      houseId = positiveId(houseIdRaw);
+      if (!houseId) {
         return res.status(400).json({ success: false, message: '无效的房源' });
       }
       const [hRows] = await pool.query(
@@ -62,8 +64,9 @@ router.post('/conversations', requireAuth, async (req, res) => {
       });
     }
 
+    // 唯一键原子去重，避免双击/双方同时联系时产生 500 或重复会话。
     const [ins] = await pool.query(
-      `INSERT INTO chat_conversations (house_id, house_id_key, user_low, user_high) VALUES (?, ?, ?, ?)`,
+      `INSERT INTO chat_conversations (house_id, house_id_key, user_low, user_high) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
       [houseId, houseIdKey, low, high]
     );
     const insertId = (ins as { insertId: number }).insertId;
@@ -79,7 +82,7 @@ router.post('/conversations', requireAuth, async (req, res) => {
       data: { id: insertId }
     });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({
       success: false,
       message: '创建会话失败（若表不存在请执行 migrations/005_chat.sql）'
@@ -130,7 +133,7 @@ router.get('/conversations', requireAuth, async (req, res) => {
       data: Array.isArray(rows) ? rows : []
     });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '获取会话列表失败' });
   }
 });
@@ -163,7 +166,7 @@ router.get('/unread-total', requireAuth, async (req, res) => {
     const total = Array.isArray(rows) && rows.length > 0 ? Number((rows[0] as any).total) || 0 : 0;
     return res.json({ success: true, message: 'ok', data: { total } });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({
       success: false,
       message: '获取未读数失败（若表不存在请执行 migrations/006_chat_user_state.sql）'
@@ -175,7 +178,7 @@ router.get('/unread-total', requireAuth, async (req, res) => {
 router.post('/conversations/:id/read', requireAuth, async (req, res) => {
   try {
     const me = (req as any).userId as number;
-    const convId = Number(req.params.id);
+    const convId = positiveId(req.params.id);
     if (!convId) {
       return res.status(400).json({ success: false, message: '无效的会话' });
     }
@@ -198,13 +201,13 @@ router.post('/conversations/:id/read', requireAuth, async (req, res) => {
     await pool.query(
       `INSERT INTO chat_user_state (user_id, conversation_id, last_read_message_id)
        VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE last_read_message_id = ?, updated_at = CURRENT_TIMESTAMP(3)`,
+       ON DUPLICATE KEY UPDATE last_read_message_id = GREATEST(last_read_message_id, ?), updated_at = CURRENT_TIMESTAMP(3)`,
       [me, convId, mx, mx]
     );
 
     return res.json({ success: true, message: 'ok', data: { lastReadMessageId: mx } });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '标记已读失败' });
   }
 });
@@ -213,9 +216,10 @@ router.post('/conversations/:id/read', requireAuth, async (req, res) => {
 router.get('/conversations/:id/messages', requireAuth, async (req, res) => {
   try {
     const me = (req as any).userId as number;
-    const convId = Number(req.params.id);
-    const limit = Math.min(Number(req.query.limit) || 50, 100);
-    const beforeId = req.query.beforeId ? Number(req.query.beforeId) : null;
+    const convId = positiveId(req.params.id);
+    const limit = req.query.limit === undefined ? 50 : positiveId(req.query.limit);
+    const beforeId = req.query.beforeId === undefined ? null : positiveId(req.query.beforeId);
+    if (!limit || limit > 100 || (req.query.beforeId !== undefined && !beforeId)) return res.status(400).json({ success: false, message: '消息分页参数无效，每页 1—100 条。' });
 
     if (!convId) {
       return res.status(400).json({ success: false, message: '无效的会话' });
@@ -251,7 +255,7 @@ router.get('/conversations/:id/messages', requireAuth, async (req, res) => {
       data: list
     });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '获取消息失败' });
   }
 });

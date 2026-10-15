@@ -15,6 +15,7 @@ dist-ssr
 .env.*
 !.env.example
 .codex_tmp/
+server/uploads/
 
 # Editor directories and files
 .vscode/*

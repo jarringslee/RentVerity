@@ -1,8 +1,10 @@
+import { logSafeError } from '../utils/logSafeError';
 import type { Server as HttpServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '../config/jwt';
 import { pool } from '../config/db';
+import { chatFrameSchema, positiveId } from '../utils/validation';
 
 type JwtPayload = { userId: number };
 
@@ -38,9 +40,11 @@ export function broadcastToUsers(userIds: number[], payload: object) {
 }
 
 export function attachChatWss(server: HttpServer) {
-  const wss = new WebSocketServer({ server, path: '/ws/chat' });
+  const wss = new WebSocketServer({ server, path: '/ws/chat', maxPayload: 16 * 1024 });
 
   wss.on('connection', (ws, req) => {
+    // 包括鉴权失败期间的协议错误，均不能成为未处理的 error 事件。
+    ws.on('error', () => {});
     let userId: number | null = null;
     try {
       const host = req.headers.host || 'localhost';
@@ -52,9 +56,10 @@ export function attachChatWss(server: HttpServer) {
       }
       const payload = jwt.verify(
         token,
-        getJwtSecret()
+        getJwtSecret(), { algorithms: ['HS256'] }
       ) as JwtPayload;
-      userId = payload.userId;
+      userId = Number.isSafeInteger(payload.userId) ? positiveId(payload.userId) : null;
+      if (!userId) throw new Error('invalid identity');
     } catch {
       ws.close(4002, 'invalid token');
       return;
@@ -63,14 +68,17 @@ export function attachChatWss(server: HttpServer) {
     addSocket(userId, ws);
 
     ws.on('message', async (data) => {
-      let body: { type?: string; conversationId?: number; content?: string };
+      let input: unknown;
       try {
-        body = JSON.parse(String(data));
+        input = JSON.parse(String(data));
       } catch {
         ws.send(JSON.stringify({ type: 'error', message: '无效的消息格式' }));
         return;
       }
 
+      const parsed = chatFrameSchema.safeParse(input);
+      if (!parsed.success) { ws.send(JSON.stringify({ type: 'error', message: '消息格式无效：会话 ID 须为正整数，正文为 1—2000 字符。' })); return; }
+      const body = parsed.data;
       if (body.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong' }));
         return;
@@ -91,7 +99,7 @@ export function attachChatWss(server: HttpServer) {
         return;
       }
 
-      const convId = Number(body.conversationId);
+      const convId = body.conversationId;
       try {
         const [cRows] = await pool.query(
           'SELECT id, user_low, user_high FROM chat_conversations WHERE id = ? LIMIT 1',
@@ -102,7 +110,7 @@ export function attachChatWss(server: HttpServer) {
           ws.send(JSON.stringify({ type: 'error', message: '会话不存在' }));
           return;
         }
-        if (conv.user_low !== userId && conv.user_high !== userId) {
+        if (Number(conv.user_low) !== userId && Number(conv.user_high) !== userId) {
           ws.send(JSON.stringify({ type: 'error', message: '无权在此会话发言' }));
           return;
         }
@@ -141,9 +149,9 @@ export function attachChatWss(server: HttpServer) {
           }
         };
 
-        broadcastToUsers([conv.user_low, conv.user_high], payload);
+        broadcastToUsers([Number(conv.user_low), Number(conv.user_high)], payload);
       } catch (e) {
-        console.error(e);
+        logSafeError(e);
         ws.send(JSON.stringify({ type: 'error', message: '发送失败' }));
       }
     });

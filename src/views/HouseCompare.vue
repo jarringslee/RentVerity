@@ -183,15 +183,6 @@ const compareHouses = () => {
               house1.value.area < house2.value.area ? 2 : 0
     },
     {
-      attribute: '风险等级',
-      house1: getRiskTagName(house1.value.riskLevel),
-      house2: getRiskTagName(house2.value.riskLevel),
-      better: house1.value.riskLevel === 'low' && house2.value.riskLevel !== 'low' ? 1 :
-              house1.value.riskLevel === 'high' && house2.value.riskLevel !== 'high' ? 2 :
-              house1.value.riskLevel === 'medium' && house2.value.riskLevel === 'high' ? 1 :
-              house1.value.riskLevel === 'medium' && house2.value.riskLevel === 'low' ? 2 : 0
-    },
-    {
       attribute: '朝向',
       house1: house1.value.orientation,
       house2: house2.value.orientation,
@@ -212,15 +203,6 @@ const compareHouses = () => {
   ]
 }
 
-// 获取风险标签名称
-const getRiskTagName = (riskLevel: string) => {
-  switch (riskLevel) {
-    case 'high': return '高风险'
-    case 'medium': return '中风险'
-    case 'low': return '低风险'
-    default: return '未知'
-  }
-}
 
 onMounted(() => {
   if (isLoggedIn.value) {

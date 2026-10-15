@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/app.ts",
     "build": "tsc",
-    "test": "npm run build && node --test dist/tests/contracts.test.js dist/tests/model.test.js dist/tests/houseSearch.test.js dist/tests/assistant.test.js",
+    "test": "npm run build && node --test dist/tests/contracts.test.js dist/tests/model.test.js dist/tests/houseSearch.test.js dist/tests/assistant.test.js dist/tests/business.test.js",
+    "db:init": "npm run build && node dist/scripts/database.js init",
+    "db:seed": "npm run build && node dist/scripts/database.js seed",
+    "smoke:business": "npm run build && node dist/scripts/businessSmoke.js",
     "smoke:contract": "npm run build && node dist/scripts/contractSmoke.js",
     "smoke:assistant": "npm run build && node dist/scripts/assistantSmoke.js",
     "start": "node dist/app.js"

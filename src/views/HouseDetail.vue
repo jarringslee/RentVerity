@@ -7,24 +7,25 @@
           <HeaderUserMenu v-if="isLoggedIn" />
           <el-button @click="goBack">返回</el-button>
           <el-button 
-            v-if="isLoggedIn"
+            v-if="isLoggedIn && houseDetail.id"
             :type="isFavorited ? 'danger' : 'primary'" 
             @click="toggleFavorite"
             :loading="favoriteLoading">
             {{ isFavorited ? '取消收藏' : '收藏房源' }}
           </el-button>
           <el-button 
-            v-else 
+            v-else-if="!isLoggedIn"
             type="primary" 
             @click="$router.push('/login')">
             登录后收藏
           </el-button>
-          <el-button type="primary" @click="contactLandlord">联系房东</el-button>
+          <el-button type="primary" :disabled="!houseDetail.id" @click="contactLandlord">联系房东</el-button>
         </div>
       </el-header>
       
       <el-main v-loading="loading">
-        <el-row :gutter="20">
+        <el-alert v-if="errorMessage" :title="errorMessage" type="error" :closable="false" show-icon />
+        <el-row v-else-if="houseDetail.id" :gutter="20">
           <el-col :span="24" :md="16">
             <el-card>
               <div class="house-basic-info">
@@ -46,14 +47,7 @@
                   </el-tag>
                 </div>
 
-                <div class="risk-tags" style="margin: 10px 0;">
-                  <el-tag 
-                    :type="getRiskTagType(houseDetail.riskLevel)" 
-                    size="small" 
-                    effect="dark">
-                    {{ getRiskTagName(houseDetail.riskLevel) }}风险
-                  </el-tag>
-                </div>
+                <el-alert title="房源信息由发布者填写，平台未进行风险评分或资质认证。" type="info" :closable="false" style="margin: 12px 0" />
                 
                 <div class="house-description">
                   <h3>房源描述</h3>
@@ -91,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, watch, onBeforeUnmount, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getHouseDetail, isFavorite, addFavorite, removeFavorite } from '../services/api'
 import userStore from '../stores/userStore'
@@ -104,6 +98,9 @@ const router = useRouter()
 // 加载状态
 const loading = ref(false)
 const favoriteLoading = ref(false)
+const errorMessage = ref('')
+let controller: AbortController | null = null
+let requestVersion = 0
 
 // 房源详情
 const houseDetail = ref<any>({})
@@ -119,27 +116,35 @@ const currentUser = computed(() => userStore.currentUser.value)
 
 // 获取房源详情
 const fetchHouseDetail = async (id: number) => {
+  controller?.abort()
+  controller = new AbortController()
+  const version = ++requestVersion, signal = controller.signal
   loading.value = true
+  houseDetail.value = {}
+  isFavorited.value = false
+  errorMessage.value = ''
   try {
-    const res = await getHouseDetail(id)
+    const res = await getHouseDetail(id, signal)
+    if (version !== requestVersion) return
     if (res.success) {
       houseDetail.value = res.data
       // 检查是否已收藏
-      checkFavoriteStatus(id)
-    }
-  } finally {
-    loading.value = false
-  }
+      void checkFavoriteStatus(id)
+    } else errorMessage.value = res.message || '房源不存在或加载失败'
+  } catch (error) {
+    if (!signal.aborted && version === requestVersion) errorMessage.value = error instanceof Error ? error.message : '房源加载失败'
+  } finally { if (version === requestVersion) loading.value = false }
 }
 
 // 检查收藏状态
 const checkFavoriteStatus = async (houseId: number) => {
   if (!currentUser.value) return
   
-  const res = await isFavorite(houseId)
-  if (res.success) {
-    isFavorited.value = res.data
-  }
+  const owner = currentUser.value.id
+  try {
+    const res = await isFavorite(houseId)
+    if (res.success && houseDetail.value.id === houseId && currentUser.value?.id === owner) isFavorited.value = res.data
+  } catch { ElMessage.warning('收藏状态加载失败，可重试') }
 }
 
 // 切换收藏状态
@@ -149,6 +154,7 @@ const toggleFavorite = async () => {
     return
   }
   
+  if (favoriteLoading.value || !houseDetail.value.id) return
   favoriteLoading.value = true
   try {
     if (isFavorited.value) {
@@ -156,38 +162,21 @@ const toggleFavorite = async () => {
       const res = await removeFavorite(houseDetail.value.id)
       if (res.success) {
         isFavorited.value = false
-      }
+      } else ElMessage.error(res.message || '取消收藏失败')
     } else {
       // 添加收藏
       const res = await addFavorite(houseDetail.value.id)
       if (res.success) {
         isFavorited.value = true
-      }
+      } else ElMessage.error(res.message || '收藏失败')
     }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '收藏操作失败')
   } finally {
     favoriteLoading.value = false
   }
 }
 
-// 获取风险标签类型
-const getRiskTagType = (riskLevel: string) => {
-  switch (riskLevel) {
-    case 'high': return 'danger'
-    case 'medium': return 'warning'
-    case 'low': return 'success'
-    default: return 'info'
-  }
-}
-
-// 获取风险标签名称
-const getRiskTagName = (riskLevel: string) => {
-  switch (riskLevel) {
-    case 'high': return '高'
-    case 'medium': return '中'
-    case 'low': return '低'
-    default: return '未知'
-  }
-}
 
 // 返回上一页
 const goBack = () => {
@@ -223,15 +212,17 @@ const contactLandlord = () => {
 // 处理图片加载错误
 const handleImageError = (e: Event) => {
   const target = e.target as HTMLImageElement
-  target.src = '/images/houses/default-house.jpg' // 设置默认图片
+  if (!target.dataset.fallback) { target.dataset.fallback = 'true'; target.src = '/images/houses/house-1.jpg' }
 }
 
-onMounted(() => {
+watch(() => route.params.id, () => {
   const houseId = Number(route.params.id)
-  if (houseId) {
+  if (Number.isSafeInteger(houseId) && houseId > 0) {
     fetchHouseDetail(houseId)
-  }
-})
+  } else { controller?.abort(); ++requestVersion; houseDetail.value = {}; loading.value = false; errorMessage.value = '无效的房源 ID' }
+}, { immediate: true })
+watch(() => currentUser.value?.id, () => { isFavorited.value = false; if (houseDetail.value.id) void checkFavoriteStatus(houseDetail.value.id) })
+onBeforeUnmount(() => { ++requestVersion; controller?.abort() })
 </script>
 
 <style scoped>
@@ -240,12 +231,18 @@ onMounted(() => {
 }
 
 .header {
+  height: auto;
+  min-height: 60px;
+  padding: 12px 20px;
+  gap: 12px;
+  flex-wrap: wrap;
   display: flex;
   justify-content: space-between;
   align-items: center;
   background-color: #409eff;
   color: white;
 }
+.header h1 { font-size: 24px; line-height: 1.3; margin: 0; }
 
 .nav {
   display: flex;

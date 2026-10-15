@@ -1,3 +1,4 @@
+import { logSafeError } from '../utils/logSafeError';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
@@ -6,6 +7,7 @@ import multer, { MulterError } from 'multer';
 import { pool } from '../config/db';
 import { requireAuth } from '../middleware/auth';
 import { AVATARS_DIR, UPLOADS_ROOT } from '../config/paths';
+import { passwordSchema, isDuplicateKey } from '../utils/validation';
 import {
   filterPreferenceKeys,
   parsePreferencesFromRow,
@@ -57,8 +59,9 @@ function tryRemoveAvatarFile(avatarUrl: string | null | undefined) {
   if (!avatarUrl || typeof avatarUrl !== 'string') return;
   if (!avatarUrl.startsWith('/uploads/avatars/')) return;
   const rel = avatarUrl.replace(/^\/uploads\//, '');
-  const abs = path.join(UPLOADS_ROOT, rel);
-  if (abs.startsWith(AVATARS_DIR) && fs.existsSync(abs)) {
+  const abs = path.resolve(UPLOADS_ROOT, rel);
+  const relative = path.relative(AVATARS_DIR, abs);
+  if (relative && !relative.startsWith('..') && !path.isAbsolute(relative) && fs.existsSync(abs)) {
     try {
       fs.unlinkSync(abs);
     } catch {
@@ -88,7 +91,7 @@ router.get('/me', requireAuth, async (req, res) => {
       data: publicUserFromRow(user)
     });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({
       success: false,
       message:
@@ -146,7 +149,7 @@ router.post(
         data: publicUserFromRow(updated)
       });
     } catch (err) {
-      console.error(err);
+      logSafeError(err);
       return res.status(500).json({ success: false, message: '上传头像失败' });
     }
   }
@@ -156,6 +159,7 @@ router.post(
 router.patch('/me', requireAuth, async (req, res) => {
   try {
     const userId = (req as any).userId as number;
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) return res.status(400).json({ success: false, message: '请提交有效的资料对象' });
     const body = req.body as Record<string, unknown>;
 
     const has =
@@ -190,8 +194,8 @@ router.patch('/me', requireAuth, async (req, res) => {
 
     if (typeof body.username === 'string') {
       const u = body.username.trim();
-      if (!u) {
-        return res.status(400).json({ success: false, message: '用户名不能为空' });
+      if (!u || u.length > 50) {
+        return res.status(400).json({ success: false, message: '用户名须为 1—50 个字符' });
       }
       finalUsername = u;
       const [dupName] = await pool.query(
@@ -284,7 +288,8 @@ router.patch('/me', requireAuth, async (req, res) => {
       data: publicUserFromRow(updated)
     });
   } catch (err) {
-    console.error(err);
+    if (isDuplicateKey(err)) return res.status(409).json({ success: false, message: '用户名或手机号已被占用' });
+    logSafeError(err);
     return res.status(500).json({
       success: false,
       message: '更新资料失败（若提示未知列，请先执行 migrations/002_user_profile_extend.sql）'
@@ -296,10 +301,10 @@ router.patch('/me', requireAuth, async (req, res) => {
 router.patch('/me/password', requireAuth, async (req, res) => {
   try {
     const userId = (req as any).userId as number;
-    const { oldPassword, newPassword } = req.body as { oldPassword?: string; newPassword?: string };
+    const { oldPassword, newPassword } = (req.body ?? {}) as { oldPassword?: string; newPassword?: string };
 
-    if (!oldPassword || !newPassword) {
-      return res.status(400).json({ success: false, message: '请填写原密码和新密码' });
+    if (typeof oldPassword !== 'string' || typeof newPassword !== 'string' || !passwordSchema.safeParse(newPassword).success) {
+      return res.status(400).json({ success: false, message: '请填写原密码；新密码至少 6 位、最多 72 个 UTF-8 字节' });
     }
 
     if (newPassword.length < 6) {
@@ -329,7 +334,7 @@ router.patch('/me/password', requireAuth, async (req, res) => {
 
     return res.json({ success: true, message: '密码修改成功', data: null });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '修改密码失败' });
   }
 });

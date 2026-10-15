@@ -1,6 +1,8 @@
+import { logSafeError } from '../utils/logSafeError';
 import { Router } from 'express';
 import { pool } from '../config/db';
 import { requireAuth } from '../middleware/auth';
+import { positiveId } from '../utils/validation';
 
 const router = Router();
 
@@ -26,7 +28,7 @@ router.get('/', requireAuth, async (req, res) => {
       data: rows
     });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '获取收藏失败' });
   }
 });
@@ -35,7 +37,7 @@ router.get('/', requireAuth, async (req, res) => {
 router.get('/check/:houseId', requireAuth, async (req, res) => {
   try {
     const userId = (req as any).userId as number;
-    const houseId = Number(req.params.houseId);
+    const houseId = positiveId(req.params.houseId);
     if (!houseId) {
       return res.status(400).json({ success: false, message: '无效的房源ID', data: false });
     }
@@ -48,7 +50,7 @@ router.get('/check/:houseId', requireAuth, async (req, res) => {
     const isFav = Array.isArray(rows) && rows.length > 0;
     return res.json({ success: true, message: '查询成功', data: isFav });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '查询失败', data: false });
   }
 });
@@ -57,19 +59,18 @@ router.get('/check/:houseId', requireAuth, async (req, res) => {
 router.post('/:houseId', requireAuth, async (req, res) => {
   try {
     const userId = (req as any).userId as number;
-    const houseId = Number(req.params.houseId);
+    const houseId = positiveId(req.params.houseId);
     if (!houseId) {
       return res.status(400).json({ success: false, message: '无效的房源ID' });
     }
 
-    await pool.query(
-      'INSERT IGNORE INTO favorites (user_id, house_id) VALUES (?, ?)',
-      [userId, houseId]
-    );
+    const [exists] = await pool.query('SELECT id FROM houses WHERE id = ? LIMIT 1', [houseId]);
+    if (!Array.isArray(exists) || !exists.length) return res.status(404).json({ success: false, message: '房源不存在' });
+    await pool.query('INSERT INTO favorites (user_id, house_id) VALUES (?, ?) ON DUPLICATE KEY UPDATE house_id = VALUES(house_id)', [userId, houseId]);
 
     return res.json({ success: true, message: '收藏成功', data: null });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '收藏失败' });
   }
 });
@@ -78,7 +79,7 @@ router.post('/:houseId', requireAuth, async (req, res) => {
 router.delete('/:houseId', requireAuth, async (req, res) => {
   try {
     const userId = (req as any).userId as number;
-    const houseId = Number(req.params.houseId);
+    const houseId = positiveId(req.params.houseId);
     if (!houseId) {
       return res.status(400).json({ success: false, message: '无效的房源ID' });
     }
@@ -86,7 +87,7 @@ router.delete('/:houseId', requireAuth, async (req, res) => {
     await pool.query('DELETE FROM favorites WHERE user_id = ? AND house_id = ?', [userId, houseId]);
     return res.json({ success: true, message: '取消收藏成功', data: null });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     return res.status(500).json({ success: false, message: '取消收藏失败' });
   }
 });

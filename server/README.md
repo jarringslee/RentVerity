@@ -6,7 +6,7 @@ Node.js 22.13+、Express、TypeScript、MySQL、JWT、WebSocket；合同解析�
 
 在本目录运行 `npm install`、`npm run dev`。生产构建为 `npm run build`，运行构建结果为 `npm start`。
 
-数据库与 JWT 配置保存在 `.env`，不要用 `.env.example` 覆盖已有配置。独立模型凭证放在被 Git 忽略的 `.env.local`；加载顺序是 `.env` → `.env.local`，后者覆盖前者，修改后重启服务端。
+数据库与 JWT 配置保存在 `.env`，不要用 `.env.example` 覆盖已有配置。独立模型凭证放在被 Git 忽略的 `.env.local`；优先级是显式进程环境 → `.env.local` → `.env`，修改文件后重启服务端。
 
 ```dotenv
 AI_API_KEY=
@@ -17,7 +17,15 @@ AI_TIMEOUT_MS=60000
 
 只填写 RentVerity 的独立 Key，不复制另一项目的凭证。超时范围为 1000—120000 毫秒。示例模型名按当前 [DeepSeek 官方入门说明](https://api-docs.deepseek.com/) 选择，可按控制台可用模型调整。
 
-`JWT_SECRET` 必填；已有账号、房源、收藏和消息仍使用 `.env` 的数据库。当前迁移 002—006 不包含基础建表或 seed，不因品牌更名重复执行。
+`JWT_SECRET` 必填，生产入口在启动时检查；已有账号、房源、收藏和消息保留原数据库。新环境使用 [完整 schema/演示 seed 与隔离验收](database/README.md)，该快照已合并 002—006，现有环境不重复执行。
+
+## 基础业务边界
+
+注册在服务端校验用户名、手机号与密码，bcrypt 输入最多 72 UTF-8 字节，存储哈希而非明文。HTTP 与 WebSocket JWT 均限制 HS256 和正整数用户 ID；密码更新不撤销已签发 JWT，属于当前简化边界，不宣传完整会话撤销体系。
+
+发布校验正整数租金/面积、成对合法坐标、字段长度、标签、图片 URL 与联系方式，owner 只取登录身份；不接受自报 riskLevel 或 owner_user_id。为兼容现有 INT 列，发布不接受小数租金/面积；预算筛选仍可使用小数，图片/拼接标签最多 255 字符。历史 risk_level 字段保留兼容但不用于 AI 评级。收藏验证房源存在并依赖唯一键幂等，按当前账号隔离。
+
+聊天会话由用户对/房源唯一键去重；按房源联系时核对发布者，历史/已读/发言都检查会话成员。消息 limit 为 1—100、beforeId 为正整数，已读游标不会回退。WS 正文 1—2000 字符、最大帧 16 KiB，非法 JSON/结构返回错误，超大帧关闭连接；有基础手动重连，但没有自动重投、离线推送或生产级消息队列。业务错误日志仅保留错误码，不写 SQL 参数/连接信息。
 
 ## 合同接口
 

@@ -83,8 +83,9 @@
                     >已连接</el-tag
                   >
                   <el-tag v-else type="info" size="small" effect="plain"
-                    >连接中…</el-tag
+                    >{{ wsConnecting ? '连接中…' : '已断开' }}</el-tag
                   >
+                  <el-button v-if="!wsConnected && !wsConnecting" size="small" @click="connectWs">重新连接</el-button>
                 </div>
 
                 <div ref="messagesEl" class="messages-container">
@@ -108,6 +109,7 @@
                     v-model="newMessage"
                     type="textarea"
                     :rows="3"
+                    :maxlength="2000"
                     placeholder="输入消息后发送"
                     @keydown.enter.exact.prevent="handleSendMessage"
                   />
@@ -181,6 +183,8 @@ const newMessage = ref("");
 const messagesEl = ref<HTMLElement | null>(null);
 
 const wsConnected = ref(false);
+const wsConnecting = ref(false);
+let disposed = false, selectionVersion = 0;
 let socket: WebSocket | null = null;
 
 const activeConv = computed(() =>
@@ -306,22 +310,31 @@ function connectWs() {
   const url = getChatWsUrl();
   if (!url) return;
   socket?.close();
-  socket = new WebSocket(url);
+  const connection = new WebSocket(url);
+  socket = connection;
   wsConnected.value = false;
+  wsConnecting.value = true;
 
   socket.onopen = () => {
+    if (socket !== connection || disposed) return;
     wsConnected.value = true;
+    wsConnecting.value = false;
   };
 
   socket.onclose = () => {
+    if (socket !== connection || disposed) return;
     wsConnected.value = false;
+    wsConnecting.value = false;
   };
 
   socket.onerror = () => {
+    if (socket !== connection || disposed) return;
     wsConnected.value = false;
+    wsConnecting.value = false;
   };
 
   socket.onmessage = (ev) => {
+    if (socket !== connection || disposed) return;
     try {
       const data = JSON.parse(ev.data as string);
       if (data.type === "message" && data.message) {
@@ -346,12 +359,14 @@ function connectWs() {
 }
 
 async function selectConversation(c: ConversationRow) {
+  const version = ++selectionVersion;
   activeConversationId.value = c.id;
   if (String(route.query.c) !== String(c.id)) {
     router.replace({ path: "/chat", query: { c: String(c.id) } });
   }
   messages.splice(0, messages.length);
   const res = await fetchChatMessages(c.id, { limit: 80 });
+  if (disposed || version !== selectionVersion || activeConversationId.value !== c.id) return;
   if (res.success && Array.isArray(res.data)) {
     const rows = res.data as Record<string, unknown>[];
     for (const r of rows) {
@@ -441,6 +456,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  disposed = true; ++selectionVersion;
   socket?.close();
   socket = null;
 });
@@ -452,12 +468,18 @@ onUnmounted(() => {
 }
 
 .header {
+  height: auto;
+  min-height: 60px;
+  padding: 12px 20px;
+  gap: 12px;
+  flex-wrap: wrap;
   display: flex;
   justify-content: space-between;
   align-items: center;
   background-color: #409eff;
   color: white;
 }
+.header h1 { font-size: 24px; line-height: 1.3; margin: 0; }
 
 .nav {
   display: flex;

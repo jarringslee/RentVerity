@@ -1,8 +1,11 @@
+import { logSafeError } from '../utils/logSafeError';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '../config/jwt';
 import { pool } from '../config/db';
+import { AppError } from '../utils/AppError';
+import { parseInput, registerSchema, loginSchema, isDuplicateKey } from '../utils/validation';
 import {
   filterPreferenceKeys,
   parsePreferencesFromRow,
@@ -33,7 +36,8 @@ function publicUserFromRow(row: any) {
 // 注册
 router.post('/register', async (req, res) => {
   try {
-    const { username, phone, password, preference, preferences, gender, city } = req.body;
+    const { username, phone, password, preference, preferences, gender, city } = parseInput(registerSchema, req.body, '请填写有效用户名、手机号及至少 6 位密码（最多 72 个 UTF-8 字节）。');
+    const secret = getJwtSecret(); // 缺配置时不能先写入账号，再在签发 token 时报错。
 
     if (!username || !phone || !password) {
       return res.status(400).json({ success: false, message: '用户名、手机号和密码不能为空' });
@@ -89,7 +93,7 @@ router.post('/register', async (req, res) => {
 
     const token = jwt.sign(
       { userId } as JwtPayload,
-      getJwtSecret(),
+      secret,
       { expiresIn: '7d' }
     );
 
@@ -108,7 +112,9 @@ router.post('/register', async (req, res) => {
       }
     });
   } catch (err) {
-    console.error(err);
+    if (err instanceof AppError) return res.status(err.status).json({ success: false, code: err.code, message: err.message });
+    if (isDuplicateKey(err)) return res.status(409).json({ success: false, message: '用户名或手机号已存在' });
+    logSafeError(err);
     return res.status(500).json({
       success: false,
       message:
@@ -120,7 +126,7 @@ router.post('/register', async (req, res) => {
 // 登录
 router.post('/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password } = parseInput(loginSchema, req.body, '用户名或密码格式不正确。');
 
     if (!username || !password) {
       return res.status(400).json({ success: false, message: '用户名和密码不能为空' });
@@ -157,7 +163,8 @@ router.post('/login', async (req, res) => {
       }
     });
   } catch (err) {
-    console.error(err);
+    if (err instanceof AppError) return res.status(err.status).json({ success: false, code: err.code, message: err.message });
+    logSafeError(err);
     return res.status(500).json({
       success: false,
       message: '登录失败，服务器错误（若提示未知列，请先执行 migrations/002_user_profile_extend.sql）'

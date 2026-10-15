@@ -2,7 +2,6 @@ import './config/env';
 import http from 'http';
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import fs from 'fs';
 import { pool } from './config/db';
 import { UPLOADS_ROOT } from './config/paths';
@@ -14,9 +13,10 @@ import chatRouter from './routes/chat';
 import contractsRouter from './routes/contracts';
 import assistantRouter from './routes/assistant';
 import { attachChatWss } from './ws/chatGateway';
+import { getJwtSecret } from './config/jwt';
+import { logSafeError } from './utils/logSafeError';
 
-dotenv.config();
-
+export function createApp() {
 const app = express();
 
 fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
@@ -37,7 +37,7 @@ app.get('/test-db', async (req, res) => {
     const [rows] = await pool.query('SELECT 1 AS result');
     res.json({ success: true, rows });
   } catch (err) {
-    console.error(err);
+    logSafeError(err);
     res.status(500).json({ success: false, message: 'DB connection failed' });
   }
 });
@@ -51,12 +51,24 @@ app.use('/chat', chatRouter);
 app.use('/contracts', contractsRouter);
 app.use('/assistant', assistantRouter);
 
+app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const type = (error as { type?: string })?.type;
+  if (type === 'entity.parse.failed' || type === 'entity.too.large') return res.status(type === 'entity.too.large' ? 413 : 400).json({ success: false, message: 'JSON 请求格式无效或内容过大。' });
+  console.error('Unhandled server error');
+  return res.status(500).json({ success: false, message: '服务暂时不可用' });
+});
+return app;
+}
+
+if (require.main === module) {
+getJwtSecret();
 const PORT = Number(process.env.PORT) || 3001;
 
-const server = http.createServer(app);
+const server = http.createServer(createApp());
 attachChatWss(server);
 
 server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
   console.log(`WebSocket chat at ws://localhost:${PORT}/ws/chat`);
 });
+}
