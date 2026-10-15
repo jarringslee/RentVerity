@@ -58,6 +58,10 @@ const router = useRouter()
 const isLoggedIn = computed(() => userStore.isLoggedIn())
 const favorites = ref<any[]>([])
 
+const viewHouseDetail = (houseId: number) => {
+  router.push({ name: 'HouseDetail', params: { id: String(houseId) } })
+}
+
 // 处理图片加载错误
 const handleImageError = (e: Event) => {
   const target = e.target as HTMLImageElement

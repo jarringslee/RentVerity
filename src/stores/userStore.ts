@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 
-const STORAGE_KEY = 'xian_rent_current_user'
+const STORAGE_KEY = 'rentverity_current_user'
 
 const readPersistedUser = () => {
   try {

@@ -1,7 +1,7 @@
 -- 扩展用户资料：性别、所在市、多选个人偏好（JSON）
 -- 在 MySQL 中执行一次（若列已存在会报错，可忽略对应语句）
 
-USE xian_rent;
+-- 在与 server/.env 中 DB_NAME 一致的数据库连接上执行；新环境建议库名 rentverity。
 
 ALTER TABLE users
   ADD COLUMN gender VARCHAR(10) NULL DEFAULT NULL COMMENT 'male / female' AFTER phone,

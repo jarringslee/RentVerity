@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { getJwtSecret } from '../config/jwt';
 
 type JwtPayload = {
   userId: number;
@@ -14,7 +15,8 @@ export const requireAuth = (req: Request, res: Response, next: NextFunction) => 
   const token = header.slice('Bearer '.length).trim();
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET || 'default_secret') as JwtPayload;
+    const payload = jwt.verify(token, getJwtSecret()) as JwtPayload;
+    if (!Number.isSafeInteger(payload.userId) || payload.userId <= 0) throw new Error('invalid user');
     (req as any).userId = payload.userId;
     return next();
   } catch {

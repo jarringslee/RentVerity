@@ -1,36 +1,26 @@
 import { Router } from 'express';
 import { pool } from '../config/db';
 import { requireAuth } from '../middleware/auth';
+import { parseHouseQuery } from '../houses/filters';
+import { houseRepository, type HouseRepository } from '../houses/repository';
+import { AppError } from '../utils/AppError';
 
+export function createHousesRouter(repository: HouseRepository = houseRepository) {
 const router = Router();
 
 // 获取房源列表（简单分页）
 router.get('/', async (req, res) => {
   try {
-    const page = Number(req.query.page) || 1;
-    const pageSize = Number(req.query.pageSize) || 10;
-
-    const offset = (page - 1) * pageSize;
-
-    const [listRows] = await pool.query(
-      'SELECT * FROM houses ORDER BY created_at DESC LIMIT ? OFFSET ?',
-      [pageSize, offset]
-    );
-
-    const [countRows] = await pool.query('SELECT COUNT(*) AS total FROM houses');
-    const total = Array.isArray(countRows) ? (countRows[0] as any).total : 0;
+    const query = parseHouseQuery(req.query);
+    const data = await repository.search(query);
 
     return res.json({
       success: true,
       message: '获取成功',
-      data: {
-        list: listRows,
-        total,
-        page,
-        pageSize
-      }
+      data
     });
   } catch (err) {
+    if (err instanceof AppError) return res.status(err.status).json({ success: false, code: err.code, message: err.message });
     console.error(err);
     return res.status(500).json({ success: false, message: '获取房源列表失败' });
   }
@@ -64,6 +54,7 @@ router.get('/:id', async (req, res) => {
 
 // 发布房源（简单版本）
 router.post('/', requireAuth, async (req, res) => {
+  const publisherId = (req as any).userId as number;
   try {
     const {
       title,
@@ -101,8 +92,8 @@ router.post('/', requireAuth, async (req, res) => {
     const [result] = await pool.query(
       `
       INSERT INTO houses 
-      (title, price, location, lng, lat, description, image, tags, risk_level, area, floor, orientation, landlord_name, landlord_phone)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (title, price, location, lng, lat, description, image, tags, risk_level, area, floor, orientation, landlord_name, landlord_phone, owner_user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         title,
@@ -118,7 +109,8 @@ router.post('/', requireAuth, async (req, res) => {
         floor || '',
         orientation || '',
         landlordName || '房东',
-        landlordPhone || ''
+        landlordPhone || '',
+        publisherId
       ]
     );
 
@@ -135,5 +127,8 @@ router.post('/', requireAuth, async (req, res) => {
   }
 });
 
-export default router;
+return router;
+}
+
+export default createHousesRouter();
 

@@ -1,5 +1,5 @@
 -- 房源地图坐标（百度 BD-09）
-USE xian_rent;
+-- 在与 server/.env 中 DB_NAME 一致的数据库连接上执行；新环境建议库名 rentverity。
 
 ALTER TABLE houses
   ADD COLUMN lng DECIMAL(10, 6) NULL DEFAULT NULL COMMENT '经度 BD-09' AFTER location,

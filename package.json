@@ -1,5 +1,5 @@
 {
-  "name": "anxin-rent",
+  "name": "rentverity",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -12,6 +12,7 @@
     "axios": "^1.13.2",
     "element-china-area-data": "^6.1.0",
     "element-plus": "^2.12.0",
+    "pdfjs-dist": "^6.4.299",
     "unsplash-js": "^7.0.20",
     "vue": "^3.5.0",
     "vue-router": "^4.5.0"
@@ -24,6 +25,7 @@
     "unplugin-auto-import": "^0.18.0",
     "unplugin-vue-components": "^0.27.0",
     "vite": "^6.0.0",
+    "vite-plugin-static-copy": "^4.1.1",
     "vue-tsc": "^2.1.0"
   }
 }

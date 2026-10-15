@@ -1,4 +1,8 @@
-# 基于Vue 3 + TypeScript + Vite的租房系统
+# 安心租 RentVerity
+
+基于 Vue 3 + TypeScript 的智能租房平台，用于前端项目实践与面试复盘。
+
+产品、文件夹及 GitHub 仓库英文名为 `RentVerity`；前端 npm 包名为 `rentverity`，服务端为 `rentverity-server`。中文名称继续使用“安心租”。
 
 ## 技术栈
 - Vue3
@@ -9,16 +13,71 @@
 - websocket
 - Node.js
 
-### vue3 + vite
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
-
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
-
-
-## 主要功能
+## 已有基础功能
 - 用户的注册登录
 - 房源信息的浏览 / 筛查 / 收藏
 - 基于地图找房 / 筛选
 - 发布房源
 - 用户聊天
-- 上传文件筛查合同风险
+
+## 合同 AI 分析
+
+首页“合同 AI 风险分析”进入独立 `/contract-analysis` 页面。登录后上传单份文字型 PDF，服务端使用 PDF.js 逐页提取文本、调用 DeepSeek 获取 JSON，并通过 Zod 和原文引用校验后展示摘要、风险卡与页码定位。未匹配的原文/页码被移除并明确提示，引用核对不保证模型判断正确。
+
+限制：10 MB、40 页、60000 字符；暂不支持扫描件 OCR、加密 PDF、DOC/DOCX。原 PDF 不写入服务端磁盘，页文本与结果仅在按用户隔离的内存会话中保留，15 分钟后过期并定期清理。刷新/离开后不提供历史记录。
+
+模型仅通过服务端调用，需要本项目独立 Key；未配置时明确报错。引用核对不提供法律判断准确率或法律意见。
+
+## AI 租房助手与服务端筛选
+
+独立 `/ai-assistant` 页面支持租房问答和自然语言条件提取。模型返回区域、预算及房型，用户编辑并确认后才查询 MySQL；模型不生成 SQL、房源 ID 或候选数据。真实卡片显示匹配依据，支持查看详情或带条件进入列表/地图；无匹配时不会自动放宽条件。合同分析、真人聊天与助手上下文隔离。
+
+普通列表与助手共用服务端参数化筛选；列表翻页、刷新及排序保留 URL 条件，支持仅设预算下限。房型暂无独立数据库字段，明确采用标题关键词匹配，不代表房源认证。助手按月租升序显示最多六条，地图最多加载 100 条并提示，不声称覆盖全部候选。
+
+当前消息和筛选草稿有界保存在按账号隔离的 sessionStorage，可清空；取消或失败的消息不进入后续上下文，刷新不会自动重查旧卡片。不提供长期记忆、RAG、Agent 或流式正文。
+
+## 地图 / 列表 / URL 联动
+
+沿用百度 JavaScript WebGL 交互地图（不是静态图片地图）。拖动或缩放结束 300ms 后，把 BD-09 视野边界与筛选条件一起交给服务端查询；URL 保存条件、bounds、中心、缩放和选中房源。刷新、浏览器前进/后退及列表/地图切换可恢复状态。地图卡片定位标点，标点选择高亮对应卡片；普通列表也可定位到地图。
+
+新操作会取消旧请求，并用请求版本阻止迟到响应覆盖；查询结果不会自动重新取景，避免视野跳回和查询循环。离开页面会移除事件、定时器及标记并销毁地图。SDK 加载/初始化失败可回退列表，视野列表可取消范围限制。
+
+地图最多加载前 100 套，不做聚合；范围查询不计无坐标记录。旧迁移 `004` 的散开坐标仅用于演示，不是经过核实的房源地址；新发布通过百度地理编码获取坐标，仍需人工核实。当前视野不支持跨日期变更线。原有 GL SDK 已完成本机真实底图/移动检查，暂不为面试用途迁移新地图引擎。
+
+## 本地开发
+
+使用 Node.js 22.13+，在包含本 README 与 `package.json` 的源码根目录运行：
+
+```powershell
+npm install
+npm run dev
+```
+
+另开终端运行服务端：
+
+```powershell
+cd server
+npm install
+npm run dev
+```
+
+服务端先读取 `server/.env`，再读取本地覆盖文件 `server/.env.local`。在后者填写 `AI_API_KEY`，不与另一项目混用，修改后重启服务端；配置示例和接口见 [服务端说明](server/README.md)。`JWT_SECRET` 必须配置，不再使用固定默认密钥。
+
+前端 API 默认地址为 `http://localhost:3001`，可通过 `VITE_API_BASE_URL` 覆盖。当前仓库尚缺基础建表和 seed，只有 002—006 增量迁移，首次启动仍需已有数据库结构。
+
+## 验证命令
+
+- 源码根：`npm run build`。
+- `server/`：`npm test`（构建、PDF/证据、筛选/助手/接口与本地模型协议测试，不调用真实 DeepSeek 或业务数据库）。
+- `server/`：`npm run smoke:contract`（显式调用真实模型一次，仅发送合成合同，不使用私人文件）。
+- `server/`：`npm run smoke:assistant`（显式调用真实模型五次，并只读查询当前数据库；固定场景不代表普遍准确率）。
+
+开发记录与真实模型验收状态统一保存在外层 `开发记录.md`，下一步见实施路线。PDF worker 与字体/CMap 资源随构建本地提供，不依赖浏览器向第三方 CDN 获取合同解析资源。
+
+## 重命名与数据兼容
+
+- 文件夹和 GitHub 仓库的重命名由用户操作，步骤保存在外层 `RentVerity-改名步骤.md`。
+- 现有数据库连接继续使用 `.env` 的 `DB_NAME`；品牌改名不直接搬迁或删除已有数据库。新建环境建议库名 `rentverity`。
+- SQL 迁移不再硬编码数据库名，执行前必须选中与 `DB_NAME` 一致的目标数据库；例如新库使用 `mysql --database=rentverity` 连接后执行迁移。
+- 登录缓存键已改为 `rentverity_current_user`，升级后需重新登录；账号、房源和聊天记录不受影响。
+- Git 历史、尚未手动更名的路径和既有数据库标识可保留历史名称，不能仅替换连接配置而不迁移数据。

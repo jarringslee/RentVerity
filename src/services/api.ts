@@ -1,7 +1,9 @@
 // 模拟API服务（逐步切到真实后端）
 import userStore from '../stores/userStore'
+import type { HouseQuery } from '../types/houses'
+import { houseFiltersToQuery } from '../utils/houseFilters'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
 
 // 公共请求封装
 const request = async (path: string, options: RequestInit = {}) => {
@@ -306,31 +308,6 @@ const houses = [
   }
 ]
 
-// 模拟消息数据（聊天功能后续接入后端）
-const messages = [
-  {
-    id: 1,
-    sender: 101,
-    receiver: 1,
-    text: '您好，请问这套房子还在吗？',
-    time: '10:25'
-  },
-  {
-    id: 2,
-    sender: 1,
-    receiver: 101,
-    text: '您好，房子还在的，请问您什么时候想看房？',
-    time: '10:26'
-  },
-  {
-    id: 3,
-    sender: 101,
-    receiver: 1,
-    text: '我这周末有时间，周六下午可以吗？',
-    time: '10:28'
-  }
-]
-
 // 模拟延时函数（仅供本地模拟用）
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -425,8 +402,15 @@ const transformHouseFromApi = (house: any) => {
     area: house.area,
     floor: house.floor,
     orientation: house.orientation,
+    ownerUserId:
+      house.owner_user_id != null && house.owner_user_id !== ''
+        ? Number(house.owner_user_id)
+        : null,
     landlord: {
-      id: house.landlord_id || null,
+      id:
+        house.owner_user_id != null && house.owner_user_id !== ''
+          ? Number(house.owner_user_id)
+          : house.landlord_id || null,
       name: house.landlord_name,
       avatar: house.landlord_avatar || 'https://fuss10.elemecdn.com/e/5d/4a731a90594a4af544c0c25941171jpeg.jpeg',
       phone: house.landlord_phone
@@ -435,11 +419,9 @@ const transformHouseFromApi = (house: any) => {
 }
 
 // 获取房源列表 —— 调用后端 /houses
-export const getHouseList = async (params?: any) => {
-  const page = params?.page || 1
-  const pageSize = params?.pageSize || 10
-
-  const res = await request(`/houses?page=${page}&pageSize=${pageSize}`)
+export const getHouseList = async (params: Partial<HouseQuery> = {}, signal?: AbortSignal) => {
+  const query = new URLSearchParams(houseFiltersToQuery(params))
+  const res = await request(`/houses?${query.toString()}`, { signal })
   if (res.success && res.data?.list) {
     const transformedList = res.data.list.map((h: any) => transformHouseFromApi(h))
     return {
@@ -465,55 +447,8 @@ export const getHouseDetail = async (id: number) => {
   return res
 }
 
-// 根据条件搜索房源 —— 先从后端取列表，再在前端过滤
-export const searchHouses = async (conditions: any) => {
-  // 这里简单取较大的 pageSize，实际项目可改成后端搜索接口
-  const res = await getHouseList({ page: 1, pageSize: 1000 })
-  if (!res.success) return res
-
-  let filteredHouses = [...res.data.list]
-  
-  // 根据位置筛选
-  if (conditions.location) {
-    filteredHouses = filteredHouses.filter(house => 
-      house.location.includes(conditions.location)
-    )
-  }
-  
-  // 根据价格范围筛选
-  if (conditions.price) {
-    const [min, max] = conditions.price.split('-').map(Number)
-    if (!isNaN(min)) {
-      filteredHouses = filteredHouses.filter(house => house.price >= min)
-    }
-    if (!isNaN(max)) {
-      filteredHouses = filteredHouses.filter(house => house.price <= max)
-    }
-  }
-  
-  // 根据房型筛选（通过标题关键字粗略判断）
-  if (conditions.houseTypes && conditions.houseTypes.length > 0) {
-    filteredHouses = filteredHouses.filter(house => 
-      conditions.houseTypes.some((type: string) => house.title.includes(type))
-    )
-  }
-
-  // 根据风险等级筛选
-  if (conditions.riskLevels && conditions.riskLevels.length > 0) {
-    filteredHouses = filteredHouses.filter(house => 
-      conditions.riskLevels.includes(house.riskLevel)
-    )
-  }
-  
-  return {
-    success: true,
-    data: {
-      list: filteredHouses,
-      total: filteredHouses.length
-    },
-    message: '搜索成功'
-  }
-}
+// 所有入口复用服务端组合条件与分页，不再一次拉取 1000 条后本地过滤。
+export const searchHouses = (conditions: Partial<HouseQuery>, signal?: AbortSignal) => getHouseList(conditions, signal)
 
 // 发布房源
 export const publishHouse = async (payload: {
@@ -538,51 +473,47 @@ export const publishHouse = async (payload: {
   })
 }
 
-// 获取与指定房东的聊天记录
-export const getMessages = async (landlordId: number) => {
-  await delay(500) // 模拟网络延迟
-  const chatMessages = messages.filter(msg => 
-    (msg.sender === landlordId && msg.receiver === 1) || 
-    (msg.sender === 1 && msg.receiver === landlordId)
-  )
-  
-  return {
-    success: true,
-    data: chatMessages,
-    message: '获取成功'
-  }
+/** WebSocket 聊天地址（需在登录后调用） */
+export const getChatWsUrl = (): string => {
+  const base = API_BASE_URL.replace(/^http/, 'ws')
+  const token = userStore.getToken?.()
+  if (!token) return ''
+  return `${base}/ws/chat?token=${encodeURIComponent(token)}`
 }
 
-// 发送消息
-export const sendMessage = async (receiverId: number, text: string) => {
-  await delay(300) // 模拟网络延迟
-  const newMessage = {
-    id: messages.length + 1,
-    sender: 1, // 当前用户
-    receiver: receiverId,
-    text,
-    time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  }
-  
-  messages.push(newMessage)
-  
-  // 模拟回复
-  setTimeout(() => {
-    const reply = {
-      id: messages.length + 1,
-      sender: receiverId,
-      receiver: 1,
-      text: '您好，我已经收到您的消息，稍后给您回复。',
-      time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-    }
-    messages.push(reply)
-  }, 2000)
-  
-  return {
-    success: true,
-    data: newMessage,
-    message: '发送成功'
-  }
+export const ensureChatConversation = async (payload: {
+  peerUserId: number
+  houseId?: number | null
+}) => {
+  return request('/chat/conversations', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export const fetchChatConversations = async () => {
+  return request('/chat/conversations')
+}
+
+export const fetchChatMessages = async (
+  conversationId: number,
+  params?: { limit?: number; beforeId?: number }
+) => {
+  const q = new URLSearchParams()
+  if (params?.limit) q.set('limit', String(params.limit))
+  if (params?.beforeId) q.set('beforeId', String(params.beforeId))
+  const qs = q.toString()
+  return request(`/chat/conversations/${conversationId}/messages${qs ? `?${qs}` : ''}`)
+}
+
+/** 全部未读消息条数（首页「在线沟通」角标） */
+export const fetchChatUnreadTotal = async () => {
+  return request('/chat/unread-total')
+}
+
+/** 将会话标记为已读到最新消息 */
+export const markChatConversationRead = async (conversationId: number) => {
+  return request(`/chat/conversations/${conversationId}/read`, { method: 'POST' })
 }
 
 // 获取当前用户收藏列表（后端 /favorites）

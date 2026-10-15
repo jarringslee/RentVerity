@@ -30,10 +30,17 @@
               </el-card>
             </el-col>
             <el-col :span="24" :md="12">
-              <el-card class="feature-card" @click="$router.push('/chat')">
-                <h3>在线沟通</h3>
-                <p>与房东直接交流</p>
-              </el-card>
+              <el-badge
+                :value="chatUnreadTotal"
+                :hidden="!isLoggedIn || chatUnreadTotal <= 0"
+                :max="99"
+                class="chat-entry-badge"
+              >
+                <el-card class="feature-card" @click="goChat">
+                  <h3>在线沟通</h3>
+                  <p>与房东直接交流</p>
+                </el-card>
+              </el-badge>
             </el-col>
             <el-col :span="24" :md="12">
               <el-card class="feature-card" @click="$router.push('/publish')">
@@ -48,35 +55,21 @@
           class="risk-analysis-section"
           style="margin-bottom: 30px; padding-top: 10px"
         >
+          <el-card style="margin-bottom: 20px">
+            <h2>AI 租房助手</h2>
+            <p>用一句话描述预算、区域和房型，确认条件后检索真实房源；也可咨询看房准备与租房流程。</p>
+            <el-button type="primary" @click="router.push('/ai-assistant')">进入 AI 助手</el-button>
+          </el-card>
           <el-card>
-            <h2>风险分析</h2>
-            <p>上传您的租赁合同或相关文件，我们将为您分析潜在风险</p>
-            <el-upload
-              class="upload-demo"
-              drag
-              action="/api/upload"
-              :auto-upload="false"
-              :on-change="handleFileChange"
-              :on-remove="handleFileRemove"
-              multiple
-            >
-              <el-icon class="el-icon--upload"><upload-filled /></el-icon>
-              <div class="el-upload__text">
-                将文件拖到此处，或<em>点击上传</em>
-              </div>
-              <template #tip>
-                <div class="el-upload__tip">
-                  支持PDF、DOC、DOCX文件，大小不超过10MB
-                </div>
-              </template>
-            </el-upload>
+            <h2>合同 AI 风险分析</h2>
+            <p>上传文字型 PDF，查看带原文和页码的风险提示，点击提示定位合同页面。</p>
+            <p>单份文件不超过 10 MB / 40 页，暂不支持扫描件及 DOC/DOCX。</p>
             <el-button
               type="primary"
-              @click="analyzeRisk"
-              :disabled="!selectedFiles.length"
+              @click="router.push('/contract-analysis')"
               style="margin-top: 15px"
             >
-              开始分析
+              进入合同分析
             </el-button>
           </el-card>
         </div>
@@ -86,53 +79,72 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, computed, onMounted } from "vue";
-import { useRouter } from "vue-router";
-import { UploadFilled } from "@element-plus/icons-vue";
+import { ref, computed, onUnmounted, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import userStore from "../stores/userStore";
 import HeaderUserMenu from "../components/HeaderUserMenu.vue";
+import { fetchChatUnreadTotal } from "../services/api";
 
 const router = useRouter();
+const route = useRoute();
 
 // 检查用户是否已登录
 const isLoggedIn = computed(() => userStore.isLoggedIn());
 
-// 搜索表单数据
-const searchForm = reactive({
-  location: "",
-  price: "",
-  type: "",
-});
+const chatUnreadTotal = ref(0);
+let unreadPollTimer: ReturnType<typeof setInterval> | null = null;
 
-// 已选择的文件
-const selectedFiles = ref<any[]>([]);
+async function refreshChatUnread() {
+  if (!isLoggedIn.value) {
+    chatUnreadTotal.value = 0;
+    return;
+  }
+  try {
+    const res = (await fetchChatUnreadTotal()) as {
+      success?: boolean;
+      data?: { total?: number };
+    };
+    if (res.success && res.data && typeof res.data.total === "number") {
+      chatUnreadTotal.value = res.data.total;
+    }
+  } catch {
+    /* 忽略 */
+  }
+}
 
-// 搜索房源方法
-const searchHouses = () => {
-  // 实际项目中这里会调用API进行搜索
-  router.push("/houses");
-};
+function goChat() {
+  router.push("/chat");
+}
 
-// 处理文件选择变化
-const handleFileChange = (file: any, fileList: any[]) => {
-  selectedFiles.value = fileList;
-};
+function startUnreadPoll() {
+  stopUnreadPoll();
+  if (!isLoggedIn.value) return;
+  void refreshChatUnread();
+  unreadPollTimer = setInterval(refreshChatUnread, 25000);
+}
 
-// 处理文件移除
-const handleFileRemove = (file: any, fileList: any[]) => {
-  selectedFiles.value = fileList;
-};
+function stopUnreadPoll() {
+  if (unreadPollTimer != null) {
+    clearInterval(unreadPollTimer);
+    unreadPollTimer = null;
+  }
+}
 
-// 风险分析
-const analyzeRisk = () => {
-  // 模拟风险分析过程
-  alert(`已选择 ${selectedFiles.value.length} 个文件，开始分析风险...`);
-  // 实际项目中这里会调用API进行风险分析
-};
+watch(
+  () => [route.path, isLoggedIn.value] as const,
+  ([path, logged]) => {
+    if (path === "/" && logged) {
+      startUnreadPoll();
+    } else {
+      stopUnreadPoll();
+      if (!logged) chatUnreadTotal.value = 0;
+    }
+  },
+  { immediate: true }
+);
 
-onMounted(() => {
-  // 页面加载时检查用户登录状态
-  console.log("用户登录状态:", isLoggedIn.value);
+onUnmounted(() => {
+  stopUnreadPoll();
 });
 </script>
 
@@ -169,6 +181,15 @@ onMounted(() => {
 
 .el-col {
   padding-top: 10px;
+}
+
+.chat-entry-badge {
+  display: block;
+  width: 100%;
+}
+
+.chat-entry-badge :deep(.el-badge__content) {
+  border: none;
 }
 
 .feature-card {

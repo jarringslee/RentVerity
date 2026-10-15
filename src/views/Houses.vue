@@ -5,6 +5,11 @@
         <h1>房源列表</h1>
         <div class="nav">
           <el-button
+            @click="goAssistant"
+            type="primary"
+            >AI 助手</el-button
+          >
+          <el-button
             @click="$router.push('/')"
             type="primary"
             style="margin-right: 10px"
@@ -42,6 +47,7 @@
                   <h2>筛选房源</h2>
                   <h4>位置</h4>
                   <el-input
+                    id="house-location"
                     v-model="filters.location"
                     placeholder="请输入位置"
                   ></el-input>
@@ -49,46 +55,23 @@
 
                 <div class="filter-section">
                   <h4>价格范围</h4>
-                  <el-select
-                    v-model="filters.price"
-                    placeholder="请选择价格范围"
-                    style="width: 100%"
-                  >
-                    <el-option label="不限" value=""></el-option>
-                    <el-option label="1000元以下" value="0-1000"></el-option>
-                    <el-option
-                      label="1000-2000元"
-                      value="1000-2000"
-                    ></el-option>
-                    <el-option
-                      label="2000-3000元"
-                      value="2000-3000"
-                    ></el-option>
-                    <el-option
-                      label="3000-4000元"
-                      value="3000-4000"
-                    ></el-option>
-                    <el-option label="4000元以上" value="4000-0"></el-option>
-                  </el-select>
+                  <label class="price-label" for="house-min-price">最低月租</label>
+                  <el-input-number id="house-min-price" v-model="filters.minPrice" :min="0" :max="1000000" controls-position="right" placeholder="不限" style="width: 100%" />
+                  <label class="price-label" for="house-max-price">最高月租</label>
+                  <el-input-number id="house-max-price" v-model="filters.maxPrice" :min="0" :max="1000000" controls-position="right" placeholder="不限" style="width: 100%" />
                 </div>
 
                 <div class="filter-section">
                   <h4>房型</h4>
                   <el-checkbox-group v-model="filters.houseTypes">
-                    <el-checkbox label="一居室"></el-checkbox>
-                    <el-checkbox label="两居室"></el-checkbox>
-                    <el-checkbox label="三居室"></el-checkbox>
-                    <el-checkbox label="合租"></el-checkbox>
+                    <el-checkbox v-for="type in HOUSE_TYPES" :key="type" :value="type">{{ type }}</el-checkbox>
                   </el-checkbox-group>
                 </div>
 
                 <div class="filter-section">
-                  <h4>风险等级</h4>
-                  <el-checkbox-group v-model="filters.riskLevels">
-                    <el-checkbox label="low">低风险</el-checkbox>
-                    <el-checkbox label="medium">中风险</el-checkbox>
-                    <el-checkbox label="high">高风险</el-checkbox>
-                  </el-checkbox-group>
+                  <h4>排序</h4>
+                  <el-select v-model="filters.sort" style="width: 100%"><el-option label="最新发布" value="latest" /><el-option label="租金从低到高" value="price_asc" /><el-option label="租金从高到低" value="price_desc" /></el-select>
+                  <p class="filter-hint">房型按标题关键词匹配，请在详情或看房时核实。</p>
                 </div>
 
                 <el-button
@@ -111,8 +94,10 @@
             <el-col :span="24" :md="18" class="house-list-container">
               <div class="house-list-wrapper">
                 <div class="house-list-content">
-                  <el-card class="house-list-card">
-                    <div class="house-list">
+                  <el-card class="house-list-card" v-loading="loading">
+                    <div class="list-toolbar"><el-button @click="goToMap">带条件去地图</el-button><span v-if="applied.bounds">已限制地图视野（无坐标房源不计入）</span><el-button v-if="applied.bounds" size="small" @click="clearBounds">取消视野限制</el-button></div>
+                    <el-alert v-if="errorMessage" :title="errorMessage" type="error" :closable="false" show-icon><el-button size="small" @click="fetchHouseList">重试</el-button></el-alert>
+                    <div v-else class="house-list">
                       <template v-if="houseList.length > 0">
                         <el-row :gutter="20">
                           <el-col
@@ -150,6 +135,7 @@
                                     <p class="description">
                                       {{ house.description }}
                                     </p>
+                                    <el-button size="small" :disabled="!hasCoordinates(house)" @click.stop="locateOnMap(house)">在地图定位</el-button>
                                     <div class="tags">
                                       <el-tag
                                         v-for="tag in house.tags"
@@ -158,20 +144,6 @@
                                         style="margin-right: 5px"
                                       >
                                         {{ tag }}
-                                      </el-tag>
-                                    </div>
-                                    <div
-                                      class="risk-tags"
-                                      style="margin-top: 10px"
-                                    >
-                                      <el-tag
-                                        :type="getRiskTagType(house.riskLevel)"
-                                        size="small"
-                                        effect="dark"
-                                      >
-                                        {{
-                                          getRiskTagName(house.riskLevel)
-                                        }}风险
                                       </el-tag>
                                     </div>
                                   </div>
@@ -229,58 +201,64 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, onMounted, computed } from "vue";
-import { useRouter } from "vue-router";
-import { getHouseList, searchHouses, getUserFavorites } from "../services/api";
+import { reactive, ref, onMounted, computed, watch, onBeforeUnmount } from "vue";
+import { useRouter, useRoute } from "vue-router";
+import { getHouseList, getUserFavorites } from "../services/api";
+import { ElMessage } from 'element-plus';
+import { HOUSE_TYPES, emptyHouseFilters, type HouseQuery } from '../types/houses';
+import { cloneHouseFilters, houseFiltersToQuery, houseQueryFromUrl, validateHouseFilters, validMapBounds } from '../utils/houseFilters';
+import { mapMetaFromUrl, mapViewToQuery } from '../utils/mapState';
 import userStore from "../stores/userStore";
 import HeaderUserMenu from "../components/HeaderUserMenu.vue";
 
 const router = useRouter();
+const route = useRoute();
 
 // 检查用户是否已登录
 const isLoggedIn = computed(() => userStore.isLoggedIn());
 
-// 搜索关键词
-const searchKeyword = computed({
-  get: () => filters.location,
-  set: (value) => {
-    filters.location = value;
-  },
-});
-
-// 清除搜索
-const clearSearch = () => {
-  filters.location = "";
-  applyFilters();
-};
-
-// 执行搜索
-const performSearch = () => {
-  applyFilters();
-};
-
 // 重置筛选条件
 const resetFilters = () => {
-  filters.location = "";
-  filters.price = "";
-  filters.houseTypes = [];
-  filters.riskLevels = [];
-  pagination.currentPage = 1;
-  fetchHouseList();
+  const next: HouseQuery = { ...emptyHouseFilters(), page: 1, pageSize: pagination.pageSize, sort: 'latest' };
+  syncDraft(next);
+  navigate(next);
 };
 
 // 跳转到地图找房
 const goToMap = () => {
-  router.push("/map");
+  router.push({ path: '/map', query: { ...houseFiltersToQuery(applied.value), ...mapMetaFromUrl(route.query) } });
+};
+function hasCoordinates(house: { lng: number | null; lat: number | null }) { return house.lng != null && house.lat != null && Number.isFinite(house.lng) && Number.isFinite(house.lat) && Math.abs(house.lng) <= 180 && Math.abs(house.lat) <= 85; }
+function locateOnMap(house: { id: number; lng: number; lat: number }) { router.push({ path: '/map', query: { ...houseFiltersToQuery(applied.value), ...mapViewToQuery({ lng: house.lng, lat: house.lat, zoom: 16 }), selected: String(house.id) } }); }
+function clearBounds() { navigate({ ...applied.value, bounds: undefined, page: 1 }); }
+
+const goAssistant = () => {
+  const invalid = validateHouseFilters(filters);
+  if (invalid) { ElMessage.error(invalid); return; }
+  router.push({ path: '/ai-assistant', query: houseFiltersToQuery(filters) });
 };
 
 // 筛选条件
-const filters = reactive({
-  location: "",
-  price: "",
-  houseTypes: [] as string[],
-  riskLevels: [] as string[],
-});
+const filters = reactive<HouseQuery>({ ...emptyHouseFilters(), page: 1, pageSize: 10, sort: 'latest' });
+const applied = ref<HouseQuery>(houseQueryFromUrl(route.query));
+const loading = ref(false);
+const errorMessage = ref('');
+let controller: AbortController | null = null;
+let requestVersion = 0;
+
+function syncDraft(query: HouseQuery) {
+  filters.location = query.location;
+  filters.minPrice = query.minPrice;
+  filters.maxPrice = query.maxPrice;
+  filters.houseTypes = [...query.houseTypes];
+  filters.sort = query.sort;
+}
+
+function navigate(query: HouseQuery) {
+  const target = { path: '/houses', query: { ...houseFiltersToQuery(query), ...(query.bounds ? mapMetaFromUrl(route.query) : {}) } };
+  if (router.resolve(target).fullPath === route.fullPath) { applied.value = query; void fetchHouseList(); }
+  else void router.push(target);
+}
 
 // 分页器本地化配置
 const paginationLocale = {
@@ -295,59 +273,25 @@ const paginationLocale = {
 
 // 应用筛选
 const applyFilters = async () => {
-  const res = await searchHouses(filters);
-  if (res.success) {
-    houseList.splice(0, houseList.length, ...res.data.list);
-    pagination.total = res.data.total;
-    pagination.currentPage = 1; // 重置到第一页
-  }
+  const invalid = validateHouseFilters(filters);
+  if (invalid) { ElMessage.error(invalid); return; }
+  navigate({ ...cloneHouseFilters(filters), bounds: applied.value.bounds, sort: filters.sort, page: 1, pageSize: pagination.pageSize });
 };
 
 // 页面切换
 const handlePageChange = (page: number) => {
-  pagination.currentPage = page;
-  fetchHouseList();
+  navigate({ ...applied.value, page });
 };
 
 // 页面大小切换
 const handleSizeChange = (size: number) => {
-  pagination.pageSize = size;
-  pagination.currentPage = 1;
-  fetchHouseList();
+  navigate({ ...applied.value, pageSize: size, page: 1 });
 };
 
 // 查看房源详情
 const viewHouseDetail = (id: number) => {
   // 跳转到房源详情页
   router.push(`/house/${id}`);
-};
-
-// 获取风险标签类型
-const getRiskTagType = (riskLevel: string) => {
-  switch (riskLevel) {
-    case "high":
-      return "danger";
-    case "medium":
-      return "warning";
-    case "low":
-      return "success";
-    default:
-      return "info";
-  }
-};
-
-// 获取风险标签名称
-const getRiskTagName = (riskLevel: string) => {
-  switch (riskLevel) {
-    case "high":
-      return "高";
-    case "medium":
-      return "中";
-    case "low":
-      return "低";
-    default:
-      return "未知";
-  }
 };
 
 // 处理图片加载错误
@@ -392,28 +336,38 @@ const pagination = reactive({
 
 // 获取房源列表
 const fetchHouseList = async () => {
-  const res = await getHouseList({
-    page: pagination.currentPage,
-    pageSize: pagination.pageSize,
-  });
-
-  if (res.success) {
-    // 为每个房源设置正确的图片路径
-    const processedList = res.data.list.map((house: any) => {
-      return {
-        ...house,
-        image: getHouseImage(house.image),
-      };
-    });
-    houseList.splice(0, houseList.length, ...processedList);
-    pagination.total = res.data.total;
-  }
+  controller?.abort();
+  controller = new AbortController();
+  const signal = controller.signal;
+  const version = ++requestVersion;
+  loading.value = true;
+  errorMessage.value = '';
+  try {
+    if (!validMapBounds(applied.value.bounds)) throw new Error('URL 视野边界无效，请取消视野限制或重置条件。');
+    const res = await getHouseList(applied.value, signal);
+    if (version !== requestVersion) return;
+    if (!res.success) throw new Error(res.message || '加载房源失败');
+    houseList.splice(0, houseList.length, ...res.data.list);
+    pagination.total = Number(res.data.total);
+  } catch (error) {
+    if (signal.aborted || version !== requestVersion) return;
+    houseList.splice(0, houseList.length);
+    pagination.total = 0;
+    errorMessage.value = error instanceof Error ? error.message : '加载失败，请重试。';
+  } finally { if (version === requestVersion) loading.value = false; }
 };
 
-onMounted(async () => {
-  await fetchHouseList();
-  await refreshFavoriteIds();
-});
+watch(() => route.query, query => {
+  if (route.path !== '/houses') return;
+  applied.value = houseQueryFromUrl(query);
+  syncDraft(applied.value);
+  pagination.currentPage = applied.value.page;
+  pagination.pageSize = applied.value.pageSize;
+  void fetchHouseList();
+}, { immediate: true });
+onMounted(() => { void refreshFavoriteIds().catch(() => {}); });
+watch(isLoggedIn, () => { void refreshFavoriteIds().catch(() => {}); });
+onBeforeUnmount(() => { ++requestVersion; controller?.abort(); });
 </script>
 
 <style scoped>
@@ -501,6 +455,7 @@ onMounted(async () => {
 .house-list {
   padding: 10px 0;
 }
+.list-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; font-size: 12px; color: #606266; }
 
 .empty-wrapper {
   padding: 40px 0;
@@ -540,6 +495,9 @@ onMounted(async () => {
 .filter-section h4 {
   margin-bottom: 10px;
 }
+
+.price-label { display: block; font-size: 13px; color: #606266; margin: 10px 0 6px; }
+.filter-hint { color: #606266; font-size: 12px; line-height: 1.7; }
 
 .house-item {
   margin-bottom: 20px;

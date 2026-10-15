@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { getJwtSecret } from '../config/jwt';
 import { pool } from '../config/db';
 import {
   filterPreferenceKeys,
@@ -88,7 +89,7 @@ router.post('/register', async (req, res) => {
 
     const token = jwt.sign(
       { userId } as JwtPayload,
-      process.env.JWT_SECRET || 'default_secret',
+      getJwtSecret(),
       { expiresIn: '7d' }
     );
 
@@ -143,7 +144,7 @@ router.post('/login', async (req, res) => {
 
     const token = jwt.sign(
       { userId: userRow.id } as JwtPayload,
-      process.env.JWT_SECRET || 'default_secret',
+      getJwtSecret(),
       { expiresIn: '7d' }
     );
 

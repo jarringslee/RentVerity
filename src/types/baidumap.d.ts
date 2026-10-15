@@ -39,6 +39,13 @@ interface BMapGL_Map {
   zoomOut(): void
   setViewport?(points: BMapGL_Point[]): void
   panTo?(point: BMapGL_Point): void
+  getBounds(): { getSouthWest(): BMapGL_Point; getNorthEast(): BMapGL_Point }
+  getCenter(): BMapGL_Point
+  getZoom(): number
+  addEventListener(event: string, handler: () => void): void
+  removeEventListener(event: string, handler: () => void): void
+  closeInfoWindow(): void
+  destroy(): void
 }
 
 interface BMapGL_PointConstructor {
@@ -56,6 +63,8 @@ interface BMapGL_MarkerConstructor {
 
 interface BMapGL_Marker {
   addEventListener(event: string, handler: Function): void
+  removeEventListener(event: string, handler: Function): void
+  setIcon(icon: BMapGL_Icon): void
 }
 
 interface BMapGL_SizeConstructor {
@@ -74,13 +83,14 @@ interface BMapGL_IconConstructor {
 interface BMapGL_Icon {}
 
 interface BMapGL_InfoWindowConstructor {
-  new (content: string, opts?: BMapGL_InfoWindowOptions): BMapGL_InfoWindow
+  new (content: string | HTMLElement, opts?: BMapGL_InfoWindowOptions): BMapGL_InfoWindow
 }
 
 interface BMapGL_InfoWindowOptions {
   width?: number
   height?: number
   title?: string
+  enableAutoPan?: boolean
 }
 
 interface BMapGL_InfoWindow {}

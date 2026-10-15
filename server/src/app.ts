@@ -1,3 +1,5 @@
+import './config/env';
+import http from 'http';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -8,6 +10,10 @@ import authRouter from './routes/auth';
 import housesRouter from './routes/houses';
 import favoritesRouter from './routes/favorites';
 import usersRouter from './routes/users';
+import chatRouter from './routes/chat';
+import contractsRouter from './routes/contracts';
+import assistantRouter from './routes/assistant';
+import { attachChatWss } from './ws/chatGateway';
 
 dotenv.config();
 
@@ -41,10 +47,16 @@ app.use('/auth', authRouter);
 app.use('/houses', housesRouter);
 app.use('/favorites', favoritesRouter);
 app.use('/users', usersRouter);
+app.use('/chat', chatRouter);
+app.use('/contracts', contractsRouter);
+app.use('/assistant', assistantRouter);
 
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+attachChatWss(server);
+
+server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
+  console.log(`WebSocket chat at ws://localhost:${PORT}/ws/chat`);
 });
-

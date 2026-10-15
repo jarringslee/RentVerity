@@ -1,476 +1,246 @@
 <template>
-  <div class="map">
-    <el-container class="full-height">
-      <el-header class="header">
-        <h1>地图找房</h1>
-        <div class="nav">
-          <el-button @click="$router.push('/')">返回主页</el-button>
-          <HeaderUserMenu v-if="isLoggedIn" />
-        </div>
-      </el-header>
-
-      <el-main>
-        <el-row :gutter="20" class="map-main-row">
-          <el-col :span="24" :md="6">
-            <el-card class="filter-card">
-              <div class="search-box">
-                <div class="field-label">地图定位</div>
-                <el-input
-                  v-model="mapSearchKeyword"
-                  placeholder="区域、地标或地铁站"
-                  clearable
-                >
-                  <template #append>
-                    <el-button :icon="Search" @click="searchOnMap" />
-                  </template>
-                </el-input>
-                <p class="field-hint">仅移动地图中心，不清除房源标记</p>
-              </div>
-
-              <div class="filter-section">
-                <div class="field-label">房源关键词</div>
-                <el-input
-                  v-model="textFilter"
-                  placeholder="标题或地址包含…"
-                  clearable
-                />
-              </div>
-
-              <div class="filter-section">
-                <h4>租金范围（元/月）</h4>
-                <el-slider
-                  v-model="priceRange"
-                  range
-                  class="price-slider"
-                  :min="0"
-                  :max="10000"
-                  :step="500"
-                  :marks="{ 0: '0', 5000: '5000', 10000: '10000' }"
-                />
-                <div class="range-summary">
-                  {{ priceRange[0] }} — {{ priceRange[1] }} 元 / 月
-                </div>
-              </div>
-
-              <div class="filter-section">
-                <h4>房型</h4>
-                <el-checkbox-group v-model="houseTypes">
-                  <el-checkbox label="一居室" />
-                  <el-checkbox label="两居室" />
-                  <el-checkbox label="三居室" />
-                  <el-checkbox label="合租" />
-                </el-checkbox-group>
-              </div>
-
-              <div class="filter-actions">
-                <el-button
-                  type="primary"
-                  class="filter-btn"
-                  :loading="dataLoading"
-                  @click="applyFilters"
-                >
-                  应用筛选
-                </el-button>
-                <el-button class="filter-btn" @click="resetFilters">
-                  重置筛选
-                </el-button>
-              </div>
-            </el-card>
-          </el-col>
-
-          <el-col :span="24" :md="18">
-            <el-card class="map-container" v-loading="dataLoading">
-              <div id="map-container" class="map-wrapper"></div>
-              <p v-if="mapHint" class="map-hint">{{ mapHint }}</p>
-            </el-card>
-          </el-col>
-        </el-row>
-      </el-main>
-    </el-container>
+  <div class="map-page">
+    <header class="map-header">
+      <div><h1>地图找房</h1><p>移动地图筛选视野内房源，点击标记或卡片互相定位</p></div>
+      <nav><el-button @click="router.push('/')">返回首页</el-button><el-button @click="goAssistant">AI 助手</el-button><el-button @click="goList">带条件去列表</el-button><HeaderUserMenu v-if="isLoggedIn" /></nav>
+    </header>
+    <main class="map-layout">
+      <aside>
+        <el-card>
+          <h2>筛选房源</h2>
+          <el-form label-position="top">
+            <el-form-item label="地图定位（不改变房源关键词）"><el-input id="map-address" v-model="mapSearchKeyword" placeholder="区域、地标或地铁站" @keyup.enter="searchOnMap"><template #append><el-button :disabled="!mapReady" @click="searchOnMap">定位</el-button></template></el-input></el-form-item>
+            <el-form-item label="房源关键词"><el-input id="map-location" v-model="draft.location" :maxlength="80" placeholder="标题或地址包含…" clearable /></el-form-item>
+            <el-form-item label="最低月租（元）"><el-input-number id="map-min-price" v-model="draft.minPrice" :min="0" :max="1000000" controls-position="right" placeholder="不限" /></el-form-item>
+            <el-form-item label="最高月租（元）"><el-input-number id="map-max-price" v-model="draft.maxPrice" :min="0" :max="1000000" controls-position="right" placeholder="不限" /></el-form-item>
+            <el-form-item label="房型"><el-checkbox-group v-model="draft.houseTypes"><el-checkbox v-for="type in HOUSE_TYPES" :key="type" :value="type">{{ type }}</el-checkbox></el-checkbox-group></el-form-item>
+          </el-form>
+          <p class="muted">房型按标题关键词匹配。地图只展示有坐标的候选；旧数据中有演示坐标，并非核实过的实际地址。</p>
+          <div class="filter-actions"><el-button type="primary" @click="applyFilters">应用筛选</el-button><el-button @click="resetFilters">重置条件</el-button><el-button @click="goListWithoutBounds">不限视野看列表</el-button></div>
+        </el-card>
+      </aside>
+      <section class="map-and-results">
+        <el-card>
+          <el-alert v-if="mapError" :title="mapError" type="warning" :closable="false" show-icon><el-button size="small" @click="goList">带条件返回列表</el-button></el-alert>
+          <div id="map-container" class="map-canvas" :aria-busy="dataLoading || viewPending"></div>
+          <p class="map-status" role="status">{{ viewPending ? '视野变化中，等待地图稳定…' : dataLoading ? '正在查询房源…' : mapReady ? '拖动或缩放结束后自动查询，已保存到 URL。' : '正在加载地图；下方仍可查看房源。' }}</p>
+        </el-card>
+        <el-card class="map-results">
+          <div class="results-heading"><h2>{{ applied.bounds ? '视野内房源' : '符合条件的房源' }}</h2><span>共 {{ total }} 套，展示 {{ houses.length }} 套（最多 100 套）</span></div>
+          <p class="muted">{{ describeHouseFilters(applied) }}{{ applied.bounds ? ' · 已限制地图视野，无坐标房源不计入' : '' }}</p>
+          <el-alert v-if="dataError" :title="dataError" type="error" :closable="false" show-icon><el-button size="small" @click="loadHouses">重试查询</el-button></el-alert>
+          <el-empty v-else-if="!dataLoading && !viewPending && !houses.length" description="当前条件下没有房源。可移动地图或修改条件，不会自动放宽。" />
+          <div class="map-house-list" :class="{ stale: dataLoading || viewPending }">
+            <article v-for="house in houses" :key="house.id" :data-house-id="house.id" :class="['map-house', { selected: selectedId === house.id }]">
+              <div><h3>{{ house.title }} <el-tag v-if="favoriteIds.has(house.id)" size="small" type="danger">已收藏</el-tag></h3><p class="price">{{ house.price }} 元/月</p><p>{{ house.location }}</p></div>
+              <div class="house-actions"><el-button size="small" :disabled="!mapReady || !hasCoordinates(house) || dataLoading || viewPending" @click="selectHouse(house.id, true)">地图定位</el-button><el-button size="small" @click="router.push(`/house/${house.id}`)">查看详情</el-button><span v-if="!hasCoordinates(house)" class="muted">缺少坐标</span></div>
+            </article>
+          </div>
+        </el-card>
+      </section>
+    </main>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from "vue";
-import { useRouter } from "vue-router";
-import { getHouseList, getUserFavorites } from "../services/api";
-import { Search } from "@element-plus/icons-vue";
-import userStore from "../stores/userStore";
-import HeaderUserMenu from "../components/HeaderUserMenu.vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import HeaderUserMenu from '../components/HeaderUserMenu.vue'
+import userStore from '../stores/userStore'
+import { getHouseList, getUserFavorites } from '../services/api'
+import { HOUSE_TYPES, emptyHouseFilters, type HouseQuery, type MapBounds } from '../types/houses'
+import { cloneHouseFilters, describeHouseFilters, houseFiltersToQuery, houseQueryFromUrl, validateHouseFilters, validMapBounds } from '../utils/houseFilters'
+import { mapMetaFromUrl, mapViewFromUrl, mapViewToQuery, roundCoordinate, selectedHouseFromUrl } from '../utils/mapState'
 
-const router = useRouter();
-const isLoggedIn = computed(() => userStore.isLoggedIn());
+interface MapHouse { id: number; title: string; price: number; location: string; lng: number | null; lat: number | null }
+type MapInstance = InstanceType<typeof BMapGL.Map>
+type Marker = InstanceType<typeof BMapGL.Marker>
+const router = useRouter(), route = useRoute()
+const isLoggedIn = computed(() => userStore.isLoggedIn())
+const draft = reactive(emptyHouseFilters())
+const applied = ref<HouseQuery>(houseQueryFromUrl(route.query))
+const mapSearchKeyword = ref('')
+const mapReady = ref(false), mapError = ref(''), dataError = ref('')
+const dataLoading = ref(false), viewPending = ref(false)
+const houses = ref<MapHouse[]>([]), total = ref(0), selectedId = ref<number | null>(null)
+const favoriteIds = ref(new Set<number>())
+let map: MapInstance | null = null
+let markers = new Map<number, Marker>()
+let markerHandlers: { marker: Marker; handler: () => void }[] = []
+let mapTimer: ReturnType<typeof setTimeout> | null = null
+let viewportTimer: ReturnType<typeof setTimeout> | null = null
+let controller: AbortController | null = null
+let requestVersion = 0, geocodeVersion = 0, favoriteVersion = 0
+let disposed = false, lastDataKey = ''
+let firstTiles = true
 
-/** 后端 + transform 后的房源（含 lng/lat） */
-interface MapHouse {
-  id: number;
-  title: string;
-  price: number;
-  location: string;
-  lng: number | null;
-  lat: number | null;
-  description?: string;
+function hasCoordinates(house: MapHouse) { return house.lng != null && house.lat != null && Number.isFinite(house.lng) && Number.isFinite(house.lat) && Math.abs(house.lng) <= 180 && Math.abs(house.lat) <= 85 }
+function cancelQuery() { ++requestVersion; controller?.abort(); controller = null; dataLoading.value = false }
+function clearMarkers() {
+  for (const { marker, handler } of markerHandlers) marker.removeEventListener('click', handler)
+  markerHandlers = []; markers.clear(); map?.clearOverlays()
 }
-
-const mapSearchKeyword = ref("西安");
-const textFilter = ref("");
-const priceRange = ref<[number, number]>([0, 10000]);
-const houseTypes = ref<string[]>([]);
-
-const dataLoading = ref(false);
-const mapHint = ref("");
-const allHouses = ref<MapHouse[]>([]);
-const favoriteIds = ref<Set<number>>(new Set());
-
-let map: any = null;
-let favIcon: any = null;
-
-function escHtml(s: string) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/"/g, "&quot;");
+function markerIcon(selected: boolean, favorited: boolean) {
+  const color = selected ? '#e6a23c' : favorited ? '#e91e63' : '#409eff'
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="40"><path fill="${color}" d="M15 0C7 0 1 6 1 14c0 10 14 26 14 26s14-16 14-26C29 6 23 0 15 0z"/><circle cx="15" cy="13" r="5" fill="white"/></svg>`
+  return new BMapGL.Icon(`data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`, new BMapGL.Size(30, 40), { anchor: new BMapGL.Size(15, 40) })
 }
-
-function filterHouses(list: MapHouse[]): MapHouse[] {
-  const [pMin, pMax] = priceRange.value;
-  const kw = textFilter.value.trim();
-  const types = houseTypes.value;
-
-  return list.filter((h) => {
-    if (h.price < pMin || h.price > pMax) return false;
-    if (kw) {
-      const t = `${h.title} ${h.location}`;
-      if (!t.includes(kw)) return false;
-    }
-    if (types.length > 0) {
-      const ok = types.some((type) => h.title.includes(type));
-      if (!ok) return false;
-    }
-    return true;
-  });
+function showSelection(scroll = false) {
+  if (!map) return
+  for (const [id, marker] of markers) marker.setIcon(markerIcon(id === selectedId.value, favoriteIds.value.has(id)))
+  const house = houses.value.find(house => house.id === selectedId.value)
+  if (!house || !hasCoordinates(house)) { map.closeInfoWindow(); return }
+  // 不拼接房源 HTML，也不注册全局 onclick；数据库文本只能作为 textContent。
+  const content = document.createElement('div'); content.className = 'map-info'
+  for (const text of [house.title, `${house.price} 元/月`, house.location]) { const paragraph = document.createElement('p'); paragraph.textContent = text; content.append(paragraph) }
+  const button = document.createElement('button'); button.textContent = '查看详情'; button.addEventListener('click', () => router.push(`/house/${house.id}`)); content.append(button)
+  map.openInfoWindow(new BMapGL.InfoWindow(content, { width: 260, enableAutoPan: false }), new BMapGL.Point(house.lng!, house.lat!))
+  if (scroll) void nextTick(() => document.querySelector(`[data-house-id="${house.id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
 }
-
-function buildInfoHtml(house: MapHouse, favorited: boolean) {
-  const favBadge = favorited ? '<span class="map-iw-fav">已收藏</span>' : "";
-  return `
-<div class="map-iw">
-  <div class="map-iw-title">${escHtml(house.title)}</div>
-  ${favBadge}
-  <div class="map-iw-price">${house.price} 元/月</div>
-  <div class="map-iw-loc">${escHtml(house.location)}</div>
-  <button type="button" class="map-iw-btn" onclick="window.__mapOpenHouseDetail(${
-    house.id
-  })">查看详情</button>
-</div>`;
-}
-
-function renderMarkers(houses: MapHouse[]) {
-  if (!map || typeof BMapGL === "undefined") return;
-
-  map.clearOverlays();
-
-  const withCoord = houses.filter(
-    (h) =>
-      h.lng != null &&
-      h.lat != null &&
-      !Number.isNaN(Number(h.lng)) &&
-      !Number.isNaN(Number(h.lat))
-  );
-
-  if (withCoord.length === 0) {
-    mapHint.value =
-      houses.length === 0
-        ? "当前筛选条件下没有房源。"
-        : "没有可展示的坐标：请为房源补充经纬度或执行数据库迁移 004。";
-    return;
+function renderMarkers() {
+  if (!map) return
+  clearMarkers()
+  for (const house of houses.value.filter(hasCoordinates)) {
+    const marker = new BMapGL.Marker(new BMapGL.Point(house.lng!, house.lat!), { icon: markerIcon(house.id === selectedId.value, favoriteIds.value.has(house.id)) })
+    const handler = () => selectHouse(house.id, false)
+    marker.addEventListener('click', handler); markerHandlers.push({ marker, handler }); markers.set(house.id, marker); map.addOverlay(marker)
   }
-
-  mapHint.value = `共 ${withCoord.length} 套房源`;
-  const points: any[] = [];
-
-  for (const house of withCoord) {
-    const lng = Number(house.lng);
-    const lat = Number(house.lat);
-    const point = new BMapGL.Point(lng, lat);
-    points.push(point);
-
-    const favorited = favoriteIds.value.has(house.id);
-    const marker =
-      favorited && favIcon
-        ? new BMapGL.Marker(point, { icon: favIcon })
-        : new BMapGL.Marker(point);
-
-    const infoWindow = new BMapGL.InfoWindow(buildInfoHtml(house, favorited), {
-      width: 260,
-      title: "",
-    });
-
-    marker.addEventListener("click", () => {
-      map!.openInfoWindow(infoWindow, point);
-    });
-
-    map.addOverlay(marker);
-  }
-
-  if (points.length === 1) {
-    map.centerAndZoom(points[0], 15);
-  } else if (typeof map.setViewport === "function") {
-    try {
-      map.setViewport(points);
-    } catch {
-      map.centerAndZoom(points[0], 12);
-    }
-  } else {
-    map.centerAndZoom(points[0], 12);
-  }
+  // 查询结果绝不自动 setViewport，否则会形成移动→查询→重新取景的循环。
+  showSelection()
 }
-
-async function loadFavorites() {
-  favoriteIds.value = new Set();
-  if (!isLoggedIn.value) return;
+function selectHouse(id: number, pan: boolean) {
+  const house = houses.value.find(house => house.id === id)
+  if (!house || !hasCoordinates(house) || !map || viewPending.value || dataLoading.value) return
+  selectedId.value = id
+  void router.replace({ path: '/map', query: { ...route.query, selected: String(id) } })
+  showSelection(!pan)
+  if (pan) map.panTo(new BMapGL.Point(house.lng!, house.lat!))
+}
+async function loadHouses() {
+  cancelQuery()
+  const invalid = validateHouseFilters(applied.value)
+  if (invalid || !validMapBounds(applied.value.bounds)) {
+    dataError.value = invalid || 'URL 视野边界无效，请重置条件。'; houses.value = []; total.value = 0; clearMarkers(); return
+  }
+  controller = new AbortController()
+  const signal = controller.signal, version = requestVersion
+  dataLoading.value = true; dataError.value = ''
   try {
-    const res = await getUserFavorites();
-    if (res.success && Array.isArray(res.data)) {
-      favoriteIds.value = new Set(
-        (res.data as { id: number }[]).map((h) => h.id)
-      );
-    }
-  } catch {
-    /* ignore */
-  }
+    const result = await getHouseList({ ...applied.value, page: 1, pageSize: 100 }, signal)
+    if (version !== requestVersion || disposed) return
+    if (!result.success) throw new Error(result.message || '查询失败，请重试。')
+    houses.value = result.data.list; total.value = Number(result.data.total); renderMarkers()
+  } catch (error) {
+    if (signal.aborted || version !== requestVersion || disposed) return
+    houses.value = []; total.value = 0; clearMarkers(); dataError.value = error instanceof Error ? error.message : '查询失败，请重试。'
+  } finally { if (version === requestVersion) dataLoading.value = false }
 }
-
-async function loadHousesAndRender() {
-  dataLoading.value = true;
-  mapHint.value = "";
-  try {
-    await loadFavorites();
-    const res = await getHouseList({ page: 1, pageSize: 2000 });
-    if (!res.success || !res.data?.list) {
-      mapHint.value = (res as { message?: string }).message || "加载房源失败";
-      allHouses.value = [];
-      if (map) renderMarkers([]);
-      return;
-    }
-    allHouses.value = res.data.list as MapHouse[];
-    applyFilters();
-  } finally {
-    dataLoading.value = false;
-  }
+function navigate(query: Record<string, string>, push = false) {
+  const target = { path: '/map', query }
+  if (router.resolve(target).fullPath === route.fullPath) { viewPending.value = false; void loadHouses() }
+  else void (push ? router.push(target) : router.replace(target))
 }
-
 function applyFilters() {
-  const filtered = filterHouses(allHouses.value);
-  renderMarkers(filtered);
+  const invalid = validateHouseFilters(draft)
+  if (invalid) { ElMessage.error(invalid); return }
+  navigate({ ...houseFiltersToQuery({ ...applied.value, ...cloneHouseFilters(draft), minPrice: draft.minPrice ?? undefined, maxPrice: draft.maxPrice ?? undefined, page: 1 }), ...mapMetaFromUrl(route.query) }, true)
 }
-
 function resetFilters() {
-  textFilter.value = "";
-  priceRange.value = [0, 10000];
-  houseTypes.value = [];
-  applyFilters();
+  Object.assign(draft, emptyHouseFilters(), { minPrice: undefined, maxPrice: undefined })
+  navigate({ ...mapMetaFromUrl(route.query), ...houseFiltersToQuery({ ...emptyHouseFilters(), bounds: validMapBounds(applied.value.bounds) ? applied.value.bounds : undefined }) }, true)
 }
-
-function searchOnMap() {
-  if (!map || !mapSearchKeyword.value.trim()) return;
-  const myGeo = new BMapGL.Geocoder();
-  myGeo.getPoint(
-    mapSearchKeyword.value.trim(),
-    (point: { lng: number; lat: number } | null) => {
-      if (point && typeof point.lng === "number") {
-        map!.centerAndZoom(point, 15);
-        if (typeof map!.panTo === "function") {
-          map!.panTo(point);
-        }
-      } else {
-        alert("未能找到该地址，请换关键词试试");
-      }
-    },
-    "西安市"
-  );
+function goList() { router.push({ path: '/houses', query: { ...houseFiltersToQuery({ ...applied.value, page: 1, pageSize: 10 }), ...mapMetaFromUrl(route.query) } }) }
+function goListWithoutBounds() { router.push({ path: '/houses', query: houseFiltersToQuery({ ...applied.value, bounds: undefined, page: 1, pageSize: 10 }) }) }
+function goAssistant() { router.push({ path: '/ai-assistant', query: houseFiltersToQuery(cloneHouseFilters(applied.value)) }) }
+function readViewport() {
+  if (!map) return null
+  const bounds = map.getBounds(), sw = bounds.getSouthWest(), ne = bounds.getNorthEast(), center = map.getCenter()
+  if (!sw || !ne || !center) return null
+  const box: MapBounds = { west: roundCoordinate(sw.lng), south: roundCoordinate(sw.lat), east: roundCoordinate(ne.lng), north: roundCoordinate(ne.lat) }
+  return validMapBounds(box) ? { bounds: box, view: { lng: center.lng, lat: center.lat, zoom: map.getZoom() } } : null
 }
-
-function initFavIcon() {
-  if (typeof BMapGL === "undefined" || favIcon) return;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40">
-    <path fill="#e91e63" d="M16 0C8 0 2 6 2 13c0 10 14 27 14 27s14-17 14-27C30 6 24 0 16 0z"/>
-    <circle cx="16" cy="12" r="4.5" fill="#fff"/>
-  </svg>`;
-  const url = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-  const size = new BMapGL.Size(32, 40);
-  favIcon = new BMapGL.Icon(url, size, { anchor: new BMapGL.Size(16, 40) });
+function viewportStart() { if (disposed) return; cancelQuery(); viewPending.value = true; if (viewportTimer) clearTimeout(viewportTimer) }
+function viewportEnd() {
+  if (disposed) return
+  if (viewportTimer) clearTimeout(viewportTimer)
+  viewportTimer = setTimeout(() => {
+    if (disposed || !map) return
+    const current = readViewport()
+    if (!current) { viewPending.value = false; dataError.value = '无法读取当前视野，暂不支持跨日期变更线的范围；请缩小地图后重试。'; return }
+    navigate({ ...houseFiltersToQuery({ ...applied.value, bounds: current.bounds, page: 1 }), ...mapViewToQuery(current.view), ...(selectedId.value ? { selected: String(selectedId.value) } : {}) })
+  }, 300)
 }
-
-function initMap() {
-  if (typeof BMapGL === "undefined") {
-    setTimeout(initMap, 500);
-    return;
+function onTilesLoaded() { if (firstTiles) { firstTiles = false; viewportEnd() } }
+const eventHandlers: [string, () => void][] = [['movestart', viewportStart], ['zoomstart', viewportStart], ['moveend', viewportEnd], ['zoomend', viewportEnd], ['resize', viewportEnd], ['tilesloaded', onTilesLoaded]]
+function initMap(attempt = 0) {
+  if (disposed) return
+  if (typeof BMapGL === 'undefined') {
+    if (attempt >= 20) { mapError.value = '百度地图 SDK 未能加载（网络或 AK 配置问题），可返回列表继续找房。'; return }
+    mapTimer = setTimeout(() => initMap(attempt + 1), 500); return
   }
-  initFavIcon();
-  map = new BMapGL.Map("map-container");
-  const point = new BMapGL.Point(108.948024, 34.263161);
-  map.centerAndZoom(point, 12);
-  map.enableScrollWheelZoom(true);
-  map.addControl(new BMapGL.NavigationControl());
-  map.addControl(new BMapGL.ScaleControl());
-  void loadHousesAndRender();
+  try {
+    map = new BMapGL.Map('map-container', { minZoom: 3, maxZoom: 19 })
+    for (const [event, handler] of eventHandlers) map.addEventListener(event, handler)
+    const view = mapViewFromUrl(route.query, validMapBounds(applied.value.bounds) ? applied.value.bounds : undefined)
+    map.centerAndZoom(new BMapGL.Point(view.lng, view.lat), view.zoom)
+    map.enableScrollWheelZoom(true); map.addControl(new BMapGL.ScaleControl())
+    mapReady.value = true; renderMarkers(); viewportEnd()
+  } catch { mapError.value = '地图初始化失败，请检查 WebGL 支持、网络或 AK 权限；可继续使用列表。'; mapReady.value = false }
 }
-
-onMounted(() => {
-  (
-    window as unknown as { __mapOpenHouseDetail?: (id: number) => void }
-  ).__mapOpenHouseDetail = (id: number) => {
-    router.push({ name: "HouseDetail", params: { id: String(id) } });
-  };
-  initMap();
-});
-
-onUnmounted(() => {
-  delete (window as unknown as { __mapOpenHouseDetail?: unknown })
-    .__mapOpenHouseDetail;
-  map = null;
-});
+function searchOnMap() {
+  if (!map || !mapSearchKeyword.value.trim()) return
+  const version = ++geocodeVersion
+  new BMapGL.Geocoder().getPoint(mapSearchKeyword.value.trim(), point => {
+    if (disposed || version !== geocodeVersion || !map) return
+    if (point && Number.isFinite(point.lng) && Number.isFinite(point.lat)) map.centerAndZoom(point, 15)
+    else ElMessage.warning('未能定位该地址，请换关键词；当前房源条件未改变。')
+  }, '西安市')
+}
+watch(() => route.query, (query, previous) => {
+  if (route.path !== '/map') return
+  const next = houseQueryFromUrl(query)
+  applied.value = next
+  if (!previous || JSON.stringify(cloneHouseFilters(next)) !== JSON.stringify(cloneHouseFilters(houseQueryFromUrl(previous)))) Object.assign(draft, emptyHouseFilters(), cloneHouseFilters(next), { minPrice: next.minPrice, maxPrice: next.maxPrice })
+  selectedId.value = selectedHouseFromUrl(query)
+  if (map && (!previous || query.center !== previous.center || query.zoom !== previous.zoom || (!query.center && query.bounds !== previous.bounds))) {
+    const target = mapViewFromUrl(query, validMapBounds(next.bounds) ? next.bounds : undefined), current = map.getCenter()
+    if (Math.abs(current.lng - target.lng) > 0.000002 || Math.abs(current.lat - target.lat) > 0.000002 || map.getZoom() !== target.zoom) map.centerAndZoom(new BMapGL.Point(target.lng, target.lat), target.zoom)
+  }
+  const key = JSON.stringify(houseFiltersToQuery({ ...next, page: 1, pageSize: 100 }))
+  if (key !== lastDataKey) { lastDataKey = key; viewPending.value = false; void loadHouses() }
+  else showSelection()
+}, { immediate: true })
+watch(() => userStore.currentUser.value?.id, async () => {
+  const version = ++favoriteVersion; favoriteIds.value = new Set()
+  if (isLoggedIn.value) {
+    try { const result = await getUserFavorites(); if (version !== favoriteVersion || disposed) return; if (result.success) favoriteIds.value = new Set(result.data.map((house: { id: number }) => Number(house.id))) } catch { /* 收藏失败不阻塞公开查询 */ }
+  }
+  if (!disposed) renderMarkers()
+}, { immediate: true })
+onMounted(() => initMap())
+onBeforeUnmount(() => {
+  disposed = true; ++geocodeVersion; ++favoriteVersion; cancelQuery()
+  if (mapTimer) clearTimeout(mapTimer)
+  if (viewportTimer) clearTimeout(viewportTimer)
+  for (const [event, handler] of eventHandlers) map?.removeEventListener(event, handler)
+  clearMarkers(); map?.closeInfoWindow(); map?.destroy(); map = null
+})
 </script>
 
 <style scoped>
-.full-height {
-  height: 100vh;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background-color: #409eff;
-  color: white;
-}
-
-.nav {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.map-main-row {
-  min-height: calc(100vh - 120px);
-}
-
-.map-wrapper {
-  height: 600px;
-  width: 100%;
-}
-
-.map-hint {
-  margin: 8px 0 0;
-  font-size: 13px;
-  color: #606266;
-}
-
-.search-box {
-  margin-bottom: 16px;
-}
-
-.field-label {
-  font-size: 13px;
-  color: #606266;
-  margin-bottom: 6px;
-}
-
-.field-hint {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: #909399;
-}
-
-.filter-section {
-  margin-bottom: 18px;
-}
-
-.filter-section h4 {
-  margin: 0 0 10px;
-  font-size: 14px;
-}
-
-.price-slider {
-  margin-bottom: 4px;
-}
-
-.range-summary {
-  margin-top: 20px;
-  padding: 10px 12px;
-  font-size: 13px;
-  font-weight: 500;
-  color: #303133;
-  text-align: center;
-  line-height: 1.4;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  background: #fafafa;
-  box-sizing: border-box;
-}
-
-.filter-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 4px;
-}
-
-.filter-btn {
-  width: 100%;
-  margin: 0;
-}
-
-@media (max-width: 768px) {
-  .map-wrapper {
-    height: 420px;
-  }
-}
+.map-page { background: #f5f7fa; min-height: 100vh; color: #303133; text-align: left; }
+.map-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 28px; background: white; border-bottom: 1px solid #e4e7ed; }
+h1 { font-size: 24px; margin: 0 0 6px; } h2 { font-size: 18px; margin: 0 0 12px; } h3 { font-size: 15px; margin: 0; } p { line-height: 1.6; }
+.map-header p { margin: 0; color: #606266; font-size: 13px; } nav, .filter-actions, .house-actions { display: flex; gap: 8px; flex-wrap: wrap; } nav :deep(.el-button), .filter-actions :deep(.el-button), .house-actions :deep(.el-button) { margin-left: 0; }
+.map-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 20px; max-width: 1500px; padding: 20px; margin: auto; }
+.map-layout > *, .map-and-results { min-width: 0; } .map-layout :deep(.el-input-number) { width: 100%; }
+.map-canvas { height: 480px; width: 100%; background: #eef1f5; } .map-status, .muted { color: #606266; font-size: 12px; } .map-status { margin: 10px 0 0; }
+.map-results { margin-top: 16px; } .results-heading { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; } .results-heading span { font-size: 13px; }
+.map-house-list { max-height: 440px; overflow-y: auto; } .map-house-list.stale { opacity: .55; } .map-house { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 14px; margin: 8px 0; border: 2px solid #ebeef5; border-radius: 8px; }
+.map-house.selected { border-color: #e6a23c; background: #fdf6ec; } .map-house p { margin: 5px 0; } .price { color: #e66b00; font-weight: 600; }
+@media (max-width: 850px) { .map-layout { grid-template-columns: minmax(0, 1fr); padding: 12px; } .map-header { flex-wrap: wrap; padding: 16px; } .map-canvas { height: 360px; } .map-house { flex-direction: column; align-items: flex-start; } }
 </style>
-
 <style>
-/* InfoWindow 内联 HTML 样式（非 scoped） */
-.map-iw {
-  padding: 4px 2px 8px;
-  font-size: 13px;
-}
-.map-iw-title {
-  font-weight: 600;
-  margin-bottom: 6px;
-  line-height: 1.35;
-}
-.map-iw-fav {
-  display: inline-block;
-  background: #fef0f0;
-  color: #f56c6c;
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  margin-bottom: 6px;
-}
-.map-iw-price {
-  color: #ff6600;
-  font-weight: bold;
-  margin-bottom: 4px;
-}
-.map-iw-loc {
-  color: #666;
-  font-size: 12px;
-  margin-bottom: 10px;
-  line-height: 1.4;
-}
-.map-iw-btn {
-  width: 100%;
-  padding: 8px 12px;
-  background: #409eff;
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-}
-.map-iw-btn:hover {
-  background: #66b1ff;
-}
+.map-info { font-size: 13px; color: #303133; padding: 4px; } .map-info p { margin: 8px 0; } .map-info button { border: none; border-radius: 4px; background: #409eff; color: white; padding: 8px 14px; cursor: pointer; }
 </style>

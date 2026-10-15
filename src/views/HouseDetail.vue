@@ -96,6 +96,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { getHouseDetail, isFavorite, addFavorite, removeFavorite } from '../services/api'
 import userStore from '../stores/userStore'
 import HeaderUserMenu from '../components/HeaderUserMenu.vue'
+import { ElMessage } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
@@ -193,16 +194,30 @@ const goBack = () => {
   router.go(-1)
 }
 
-// 联系房东
+// 联系房东（与发布者用户在线沟通，需房源有 owner_user_id）
 const contactLandlord = () => {
   if (!currentUser.value) {
     router.push('/login')
     return
   }
-  
-  if (houseDetail.value.landlord) {
-    router.push(`/chat/${houseDetail.value.landlord.id}`)
+
+  const ownerId = houseDetail.value.ownerUserId ?? houseDetail.value.landlord?.id
+  if (!ownerId) {
+    ElMessage.warning('该房源未绑定发布者账号，暂无法在线沟通')
+    return
   }
+  if (Number(ownerId) === Number(currentUser.value.id)) {
+    ElMessage.info('这是您自己发布的房源')
+    return
+  }
+
+  router.push({
+    path: '/chat',
+    query: {
+      houseId: String(houseDetail.value.id),
+      peerId: String(ownerId)
+    }
+  })
 }
 
 // 处理图片加载错误

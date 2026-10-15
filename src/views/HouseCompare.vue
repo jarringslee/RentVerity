@@ -132,7 +132,7 @@ const comparisonResult = ref<any[]>([])
 const fetchFavoriteHouses = async () => {
   if (!currentUser.value) return
   
-  const res = await getUserFavorites(currentUser.value.id)
+  const res = await getUserFavorites()
   if (res.success) {
     favoriteHouses.value = res.data
   }
