@@ -1,10 +1,11 @@
 import { logSafeError } from '../utils/logSafeError';
 import type { Server as HttpServer } from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '../config/jwt';
 import { pool } from '../config/db';
 import { chatFrameSchema, positiveId } from '../utils/validation';
+import { SerialTaskQueue } from '../utils/serialQueue';
 
 type JwtPayload = { userId: number };
 
@@ -67,7 +68,9 @@ export function attachChatWss(server: HttpServer) {
 
     addSocket(userId, ws);
 
-    ws.on('message', async (data) => {
+    const queue = new SerialTaskQueue(32, logSafeError);
+    const processMessage = async (data: RawData) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
       let input: unknown;
       try {
         input = JSON.parse(String(data));
@@ -153,6 +156,11 @@ export function attachChatWss(server: HttpServer) {
       } catch (e) {
         logSafeError(e);
         ws.send(JSON.stringify({ type: 'error', message: '发送失败' }));
+      }
+    };
+    ws.on('message', data => {
+      if (!queue.enqueue(() => processMessage(data)) && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'error', message: '发送过快，待处理消息已达上限；本条未接收，请稍后手动重发。' }));
       }
     });
 

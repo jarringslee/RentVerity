@@ -124,7 +124,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, computed, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -136,6 +136,8 @@ import HeaderUserMenu from '../components/HeaderUserMenu.vue'
 const router = useRouter()
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
+let disposed = false
+onBeforeUnmount(() => { disposed = true })
 const cities = ref<string[]>([]), citiesLoading = ref(false), citiesError = ref(false)
 async function loadCities() {
   citiesLoading.value = true; citiesError.value = false
@@ -171,7 +173,7 @@ const rules: FormRules = {
   location: [{ required: true, message: '请输入位置', trigger: 'blur' }]
 }
 
-function geocodeLocation(address: string): Promise<{ lng: number; lat: number } | null> {
+function geocodeLocation(address: string, city: string): Promise<{ lng: number; lat: number } | null> {
   return new Promise((resolve) => {
     // SDK 回调未返回也不能永久卡住发布；超时后不伪造坐标。
     const timer = setTimeout(() => resolve(null), 5000)
@@ -190,7 +192,7 @@ function geocodeLocation(address: string): Promise<{ lng: number; lat: number } 
           finish(null)
         }
       },
-      form.city
+      city
     )
   })
 }
@@ -202,32 +204,34 @@ const handleSubmit = async () => {
   }
 
   if (!formRef.value || submitting.value) return
-
-  await formRef.value.validate(async valid => {
-    if (!valid) return
-
-    submitting.value = true
-    try {
-      const coords = await geocodeLocation(form.location)
-      if (!coords) {
-        ElMessage.warning('未能解析地址坐标，房源仍可发布，但地图页可能不显示该点')
-      }
-      const res = await publishHouse({
-        ...form,
-        lng: coords?.lng ?? null,
-        lat: coords?.lat ?? null
-      })
-      if (res.success) {
-        router.push('/houses')
-      } else {
-        ElMessage.error((res as { message?: string }).message || '发布失败')
-      }
-    } catch (error) {
-      ElMessage.error(error instanceof Error ? error.message : '发布失败，请重试')
-    } finally {
-      submitting.value = false
+  // 校验也可能异步，先占位，不能等 validate 回调后再防重复。
+  submitting.value = true
+  const ownerToken = userStore.getToken()
+  try {
+    if (!await formRef.value.validate().catch(() => false)) return
+    const payload = { ...form, tags: [...form.tags] }
+    const coords = await geocodeLocation(payload.location, payload.city)
+    if (disposed || !ownerToken || userStore.getToken() !== ownerToken) return
+    if (!coords) {
+      ElMessage.warning('未能解析地址坐标，房源仍可发布，但地图页可能不显示该点')
     }
-  })
+    const res = await publishHouse({
+      ...payload,
+      lng: coords?.lng ?? null,
+      lat: coords?.lat ?? null
+    })
+    if (disposed || userStore.getToken() !== ownerToken) return
+    if (res.success) {
+      router.push('/houses')
+    } else {
+      ElMessage.error((res as { message?: string }).message || '发布失败')
+    }
+  } catch (error) {
+    if (disposed) return
+    ElMessage.error(error instanceof Error ? error.message : '发布失败，请重试')
+  } finally {
+    submitting.value = false
+  }
 }
 </script>
 

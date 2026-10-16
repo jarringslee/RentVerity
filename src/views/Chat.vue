@@ -18,6 +18,7 @@
               </template>
 
               <div v-if="convLoading" class="list-loading">加载中…</div>
+              <div v-else-if="conversationError" class="list-empty" role="alert">{{ conversationError }}<el-button text @click="loadConversations">重新加载会话</el-button></div>
               <div v-else-if="conversations.length === 0" class="list-empty">
                 暂无会话，在房源详情页联系房东开始聊天
               </div>
@@ -25,6 +26,7 @@
                 <div
                   v-for="c in conversations"
                   :key="c.id"
+                  :data-conversation-id="c.id"
                   class="contact-item"
                   :class="{ active: activeConversationId === c.id }"
                   @click="selectConversation(c)"
@@ -88,10 +90,18 @@
                   <el-button v-if="!wsConnected && !wsConnecting" size="small" @click="connectWs">重新连接</el-button>
                 </div>
 
-                <div ref="messagesEl" class="messages-container">
+                <div ref="messagesEl" class="messages-container" @scroll="scheduleRead">
+                  <div class="history-controls">
+                    <el-button v-if="hasOlder" size="small" :loading="historyLoading" :disabled="latestLoading || messages.length >= CHAT_RENDER_LIMIT" @click="loadHistory(true)">加载更早消息</el-button>
+                    <span v-else-if="messages.length">已到最早记录</span>
+                    <span v-if="messages.length >= CHAT_RENDER_LIMIT">当前最多展示 {{ CHAT_RENDER_LIMIT }} 条；重新选择会话可回到最新。</span>
+                    <span v-if="latestLoading" role="status">正在同步最近消息…</span>
+                    <el-button v-if="historyError" text type="danger" @click="loadHistory(failedOlder)">{{ historyError }}，点击重试</el-button>
+                  </div>
                   <div
                     v-for="m in messages"
                     :key="m.id"
+                    :data-message-id="m.id"
                     class="message"
                     :class="{ 'message-mine': isMine(m) }"
                   >
@@ -116,13 +126,14 @@
                   <div class="send-button">
                     <el-button
                       type="primary"
-                      :disabled="!wsConnected"
+                      :disabled="!wsConnected || latestLoading"
                       @click="handleSendMessage"
                     >
                       发送
                     </el-button>
                   </div>
                 </div>
+                <p v-if="connectionNote" class="connection-note" role="status">{{ connectionNote }}</p>
               </template>
             </el-card>
           </el-col>
@@ -146,6 +157,7 @@ import {
   markChatConversationRead,
 } from "../services/api";
 import { resolveAvatarSrc } from "../utils/avatarUrl";
+import { CHAT_PAGE_SIZE, CHAT_RENDER_LIMIT, mergeChatMessages, parseChatMessage, type ChatMessage } from '../utils/chatMessages';
 
 interface ConversationRow {
   id: number;
@@ -160,14 +172,6 @@ interface ConversationRow {
   unread_count?: number;
 }
 
-interface ChatMessageRow {
-  id: number;
-  conversation_id: number;
-  sender_id: number;
-  content: string;
-  createdAt: string;
-}
-
 const route = useRoute();
 const router = useRouter();
 const isLoggedIn = computed(() => userStore.isLoggedIn());
@@ -178,7 +182,7 @@ const currentUserId = computed(
 const conversations = reactive<ConversationRow[]>([]);
 const convLoading = ref(false);
 const activeConversationId = ref<number | null>(null);
-const messages = reactive<ChatMessageRow[]>([]);
+const messages = reactive<ChatMessage[]>([]);
 const newMessage = ref("");
 const messagesEl = ref<HTMLElement | null>(null);
 
@@ -186,6 +190,13 @@ const wsConnected = ref(false);
 const wsConnecting = ref(false);
 let disposed = false, selectionVersion = 0;
 let socket: WebSocket | null = null;
+const conversationError = ref(''), historyError = ref(''), connectionNote = ref('');
+const historyLoading = ref(false), latestLoading = ref(false), hasOlder = ref(false);
+let beforeId: number | undefined, failedOlder = false, connectedOnce = false;
+let historyController: AbortController | null = null;
+let readTimer: ReturnType<typeof setTimeout> | undefined;
+const readSent = new Map<number, number>();
+const seenEvents = new Set<number>(), previewIds = new Map<number, number>();
 
 const activeConv = computed(() =>
   conversations.find((c) => c.id === activeConversationId.value)
@@ -196,7 +207,7 @@ function peerAvatar(c: ConversationRow | undefined) {
   return resolveAvatarSrc(c.peer_avatar_url);
 }
 
-function isMine(m: ChatMessageRow) {
+function isMine(m: ChatMessage) {
   return m.sender_id === currentUserId.value;
 }
 
@@ -232,15 +243,75 @@ function formatMsgTime(raw: string) {
 
 function scrollToBottom() {
   nextTick(() => {
+    if (disposed) return;
     const el = messagesEl.value;
     if (el) el.scrollTop = el.scrollHeight;
+    scheduleRead();
   });
+}
+
+function nearBottom() { const el = messagesEl.value; return !!el && el.scrollHeight - el.scrollTop - el.clientHeight < 60; }
+function scheduleRead() {
+  clearTimeout(readTimer);
+  if (disposed || latestLoading.value || document.visibilityState !== 'visible' || !nearBottom()) return;
+  const id = activeConversationId.value, cursor = messages[messages.length - 1]?.id;
+  if (!id || !cursor || cursor <= (readSent.get(id) ?? 0)) return;
+  readTimer = setTimeout(async () => {
+    if (disposed || activeConversationId.value !== id || document.visibilityState !== 'visible' || !nearBottom()) return;
+    const previous = readSent.get(id) ?? 0;
+    readSent.set(id, cursor);
+    try {
+      const res = await markChatConversationRead(id, cursor);
+      if (!res.success) throw new Error();
+      const conv = conversations.find(c => c.id === id);
+      if (!disposed && activeConversationId.value === id && (messages[messages.length - 1]?.id ?? 0) <= cursor && conv) conv.unread_count = 0;
+    } catch { if (readSent.get(id) === cursor) readSent.set(id, previous); }
+  }, 150);
+}
+
+function mergeMessages(incoming: ChatMessage[]) {
+  messages.splice(0, messages.length, ...mergeChatMessages(messages, incoming));
+}
+
+async function loadHistory(older = false) {
+  const id = activeConversationId.value;
+  if (!id || (older && (historyLoading.value || latestLoading.value || !beforeId || messages.length >= CHAT_RENDER_LIMIT))) return;
+  historyController?.abort();
+  const controller = new AbortController(); historyController = controller;
+  const deadline = AbortSignal.timeout(15000);
+  const signal = AbortSignal.any([controller.signal, deadline]);
+  const version = selectionVersion;
+  const container = messagesEl.value, oldHeight = container?.scrollHeight ?? 0, oldTop = container?.scrollTop ?? 0;
+  latestLoading.value = !older; historyLoading.value = older; historyError.value = ''; failedOlder = older;
+  const limit = older ? Math.min(CHAT_PAGE_SIZE, CHAT_RENDER_LIMIT - messages.length) : CHAT_PAGE_SIZE;
+  try {
+    const res = await fetchChatMessages(id, { limit, ...(older ? { beforeId } : {}) }, signal);
+    if (disposed || version !== selectionVersion || activeConversationId.value !== id || controller.signal.aborted) return;
+    if (!res.success || !Array.isArray(res.data)) throw new Error(res.message || '消息加载失败');
+    const rows = (res.data as Record<string, unknown>[]).map(parseChatMessage).sort((a,b) => a.id-b.id);
+    mergeMessages(rows);
+    beforeId = rows[0]?.id;
+    hasOlder.value = rows.length === limit;
+    for (const row of rows) seenEvents.add(row.id);
+    if (seenEvents.size > 2000) { seenEvents.clear(); for (const row of messages) seenEvents.add(row.id); }
+    await nextTick();
+    if (disposed || version !== selectionVersion) return;
+    if (older && container) container.scrollTop = oldTop + container.scrollHeight - oldHeight;
+    else scrollToBottom();
+  } catch (error) {
+    if (disposed || controller.signal.aborted || version !== selectionVersion) return;
+    historyError.value = deadline.aborted ? '消息加载超时' : error instanceof Error ? error.message : '消息加载失败';
+  } finally {
+    if (historyController === controller) { latestLoading.value = false; historyLoading.value = false; historyController = null; scheduleRead(); }
+  }
 }
 
 async function loadConversations() {
   convLoading.value = true;
+  conversationError.value = '';
   try {
     const res = await fetchChatConversations();
+    if (disposed) return;
     if (res.success && Array.isArray(res.data)) {
       const rows: ConversationRow[] = (res.data as Record<string, unknown>[]).map((r) => ({
         id: Number(r.id),
@@ -256,8 +327,9 @@ async function loadConversations() {
       }));
       conversations.splice(0, conversations.length, ...rows);
     } else {
-      ElMessage.error((res as { message?: string }).message || "加载会话失败");
+      throw new Error((res as { message?: string }).message || "加载会话失败");
     }
+  } catch (error) { if (!disposed) conversationError.value = error instanceof Error ? error.message : '会话加载失败';
   } finally {
     convLoading.value = false;
   }
@@ -270,17 +342,20 @@ function applyIncomingMessage(payload: {
   content: string;
   createdAt: string;
 }) {
+  if (seenEvents.has(payload.id)) return;
+  seenEvents.add(payload.id);
+  if (seenEvents.size > 2000) { seenEvents.clear(); seenEvents.add(payload.id); }
+  const follow = nearBottom();
   const fromPeer = payload.senderId !== currentUserId.value;
   const conv = conversations.find((c) => c.id === payload.conversationId);
   if (conv) {
-    conv.last_message_at = payload.createdAt;
-    conv.last_message_preview = payload.content;
-    if (fromPeer) {
-      if (payload.conversationId === activeConversationId.value) {
-        conv.unread_count = 0;
-      } else {
-        conv.unread_count = convUnreadCount(conv) + 1;
-      }
+    if (payload.id >= (previewIds.get(payload.conversationId) ?? 0)) {
+      previewIds.set(payload.conversationId, payload.id);
+      conv.last_message_at = payload.createdAt;
+      conv.last_message_preview = payload.content;
+    }
+    if (fromPeer && payload.id > (readSent.get(payload.conversationId) ?? 0)) {
+      conv.unread_count = convUnreadCount(conv) + 1;
     }
     conversations.sort(
       (a, b) =>
@@ -290,19 +365,14 @@ function applyIncomingMessage(payload: {
   }
 
   if (payload.conversationId === activeConversationId.value) {
-    if (!messages.some((m) => m.id === payload.id)) {
-      messages.push({
+      mergeMessages([{
         id: payload.id,
         conversation_id: payload.conversationId,
         sender_id: payload.senderId,
         content: payload.content,
         createdAt: payload.createdAt,
-      });
-      scrollToBottom();
-    }
-    if (fromPeer) {
-      void markChatConversationRead(payload.conversationId).catch(() => {});
-    }
+      }]);
+      if (follow || !fromPeer) scrollToBottom();
   }
 }
 
@@ -319,12 +389,20 @@ function connectWs() {
     if (socket !== connection || disposed) return;
     wsConnected.value = true;
     wsConnecting.value = false;
+    if (connectedOnce) {
+      connectionNote.value = '已重新连接，正在同步最近消息；更早记录可分页查看。';
+      const current = activeConv.value;
+      void loadConversations();
+      if (current) void selectConversation(current);
+    }
+    connectedOnce = true;
   };
 
   socket.onclose = () => {
     if (socket !== connection || disposed) return;
     wsConnected.value = false;
     wsConnecting.value = false;
+    connectionNote.value = '连接已断开，草稿保留；重新连接后同步历史，不会自动重发消息。';
   };
 
   socket.onerror = () => {
@@ -359,34 +437,15 @@ function connectWs() {
 }
 
 async function selectConversation(c: ConversationRow) {
-  const version = ++selectionVersion;
+  ++selectionVersion;
   activeConversationId.value = c.id;
   if (String(route.query.c) !== String(c.id)) {
     router.replace({ path: "/chat", query: { c: String(c.id) } });
   }
   messages.splice(0, messages.length);
-  const res = await fetchChatMessages(c.id, { limit: 80 });
-  if (disposed || version !== selectionVersion || activeConversationId.value !== c.id) return;
-  if (res.success && Array.isArray(res.data)) {
-    const rows = res.data as Record<string, unknown>[];
-    for (const r of rows) {
-      messages.push({
-        id: Number(r.id),
-        conversation_id: Number(r.conversation_id),
-        sender_id: Number(r.sender_id),
-        content: String(r.content),
-        createdAt:
-          typeof r.created_at === "string"
-            ? r.created_at
-            : String(r.created_at ?? ""),
-      });
-    }
-    scrollToBottom();
-    c.unread_count = 0;
-    void markChatConversationRead(c.id).catch(() => {});
-  } else {
-    ElMessage.error((res as { message?: string }).message || "加载消息失败");
-  }
+  hasOlder.value = false; beforeId = undefined;
+  clearTimeout(readTimer);
+  await loadHistory();
 }
 
 async function selectConversationById(id: number) {
@@ -429,6 +488,7 @@ function handleSendMessage() {
   const text = newMessage.value.trim();
   if (
     !text ||
+    latestLoading.value ||
     !activeConversationId.value ||
     !socket ||
     socket.readyState !== WebSocket.OPEN
@@ -446,23 +506,29 @@ function handleSendMessage() {
 }
 
 onMounted(async () => {
+  document.addEventListener('visibilitychange', scheduleRead);
   if (!isLoggedIn.value) {
     router.push("/login");
     return;
   }
   await loadConversations();
+  if (disposed) return;
   connectWs();
   await openFromQuery();
 });
 
 onUnmounted(() => {
   disposed = true; ++selectionVersion;
+  clearTimeout(readTimer); historyController?.abort();
+  document.removeEventListener('visibilitychange', scheduleRead);
   socket?.close();
   socket = null;
 });
 </script>
 
 <style scoped>
+.history-controls { display: grid; justify-items: center; gap: 8px; font-size: 12px; color: #77838e; margin: 8px 0 16px; }
+.connection-note { font-size: 12px; color: #677b8b; margin: 10px 0 0; }
 .full-height {
   height: 100vh;
 }

@@ -214,13 +214,14 @@ export const fetchChatConversations = async () => {
 
 export const fetchChatMessages = async (
   conversationId: number,
-  params?: { limit?: number; beforeId?: number }
+  params?: { limit?: number; beforeId?: number },
+  signal?: AbortSignal
 ) => {
   const q = new URLSearchParams()
   if (params?.limit) q.set('limit', String(params.limit))
   if (params?.beforeId) q.set('beforeId', String(params.beforeId))
   const qs = q.toString()
-  return request(`/chat/conversations/${conversationId}/messages${qs ? `?${qs}` : ''}`)
+  return request(`/chat/conversations/${conversationId}/messages${qs ? `?${qs}` : ''}`, { signal })
 }
 
 /** 全部未读消息条数（首页「在线沟通」角标） */
@@ -228,9 +229,9 @@ export const fetchChatUnreadTotal = async () => {
   return request('/chat/unread-total')
 }
 
-/** 将会话标记为已读到最新消息 */
-export const markChatConversationRead = async (conversationId: number) => {
-  return request(`/chat/conversations/${conversationId}/read`, { method: 'POST' })
+/** 确认本页已展示到的消息，不把并发入库但尚未收到的内容提前标成已读。 */
+export const markChatConversationRead = async (conversationId: number, lastReadMessageId: number) => {
+  return request(`/chat/conversations/${conversationId}/read`, { method: 'POST', body: JSON.stringify({ lastReadMessageId }) })
 }
 
 // 获取当前用户收藏列表（后端 /favorites）

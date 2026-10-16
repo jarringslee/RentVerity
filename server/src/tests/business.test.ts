@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { databaseName } from '../database/bootstrap';
 import { positiveId, registerSchema, publishSchema, chatFrameSchema, passwordSchema } from '../utils/validation';
+import { SerialTaskQueue } from '../utils/serialQueue';
 
 test('ids and registration reject non-scalars and bcrypt truncation', () => {
   for (const value of [null, {}, [], [1], 0, -1, 1.5, '1.5', '1e2', 'Infinity', Number.MAX_SAFE_INTEGER + 1]) assert.equal(positiveId(value), null);
@@ -22,4 +23,19 @@ test('WebSocket messages reject null, arrays, objects and oversized content with
 test('database target must be explicit and safe to quote', () => {
   assert.equal(databaseName('rentverity_demo'), 'rentverity_demo');
   for (const name of ['', undefined, 'mysql; DROP DATABASE', '../rent', 'a`b', 'a'.repeat(65)]) assert.throws(() => databaseName(name));
+});
+
+test('bounded WS queue serializes async work, rejects overflow and survives a failed task', async () => {
+  const order: number[] = [], errors: unknown[] = [];
+  let release!: () => void, finished!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const done = new Promise<void>(resolve => { finished = resolve; });
+  const queue = new SerialTaskQueue(3, error => { errors.push(error); });
+  assert.equal(queue.enqueue(async () => { order.push(1); await hold; order.push(2); }), true);
+  assert.equal(queue.enqueue(async () => { order.push(3); throw new Error('synthetic'); }), true);
+  assert.equal(queue.enqueue(async () => { order.push(4); finished(); }), true);
+  assert.equal(queue.enqueue(async () => { order.push(99); }), false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(order, [1]); release(); await done;
+  assert.deepEqual(order, [1, 2, 3, 4]); assert.equal(errors.length, 1);
 });

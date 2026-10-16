@@ -109,6 +109,8 @@ async function businessChecks({ base, password, query }: Sandbox) {
     const receivedOwner = receive(ownerSocket), receivedTenant = receive(tenantSocket);
     tenantSocket.send(JSON.stringify({ type: 'send', conversationId, content: '合成验收消息：你好，请问还在出租吗？' }));
     const [a, b] = await Promise.all([receivedOwner, receivedTenant]); assert.equal(a.type, 'message'); assert.equal(a.message.id, b.message.id);
+    assert.equal((await request(`/chat/conversations/${conversationId}/read`, 'POST', { lastReadMessageId: '1' }, owner)).status, 400);
+    assert.equal((await request(`/chat/conversations/${conversationId}/read`, 'POST', { lastReadMessageId: 99999999 }, owner)).status, 400);
     assert.equal((await request('/chat/unread-total', 'GET', undefined, owner)).body.data.total, 1);
     assert.equal((await request('/chat/unread-total', 'GET', undefined, outsider)).body.data.total, 0);
     const history = await request(`/chat/conversations/${conversationId}/messages`, 'GET', undefined, owner); assert.equal(history.body.data.length, 1); assert.equal(history.body.data[0].content, a.message.content);
@@ -117,9 +119,27 @@ async function businessChecks({ base, password, query }: Sandbox) {
     const replyOwner = receive(ownerSocket), replyTenant = receive(tenantSocket);
     ownerSocket.send(JSON.stringify({ type: 'send', conversationId, content: '还在，欢迎预约看房。' })); await Promise.all([replyOwner, replyTenant]);
     const older = await request(`/chat/conversations/${conversationId}/messages?beforeId=${Number(a.message.id) + 1}&limit=1`, 'GET', undefined, tenant); assert.equal(older.body.data[0].id, a.message.id);
+    const received: any[] = [];
+    const burstDone = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { tenantSocket.off('message', collect); reject(new Error('burst delivery timeout')); }, 5000);
+      const collect = (raw: unknown) => { const message = JSON.parse(String(raw)); if (message.type !== 'message') return; received.push(message.message); if (received.length === 12) { clearTimeout(timer); tenantSocket.off('message', collect); resolve(); } };
+      tenantSocket.on('message', collect);
+    });
+    for (let i = 0; i < 12; i++) tenantSocket.send(JSON.stringify({ type: 'send', conversationId, content: `有序连发-${i}` }));
+    await burstDone;
+    assert.deepEqual(received.map(m => m.content), Array.from({ length: 12 }, (_, i) => `有序连发-${i}`));
+    assert.ok(received.every((m, i) => i === 0 || m.id > received[i - 1].id));
+    const cursor = received[4].id;
+    const read = await request(`/chat/conversations/${conversationId}/read`, 'POST', { lastReadMessageId: cursor }, owner);
+    assert.equal(read.body.data.lastReadMessageId, cursor);
+    assert.equal((await request('/chat/unread-total', 'GET', undefined, owner)).body.data.total, 7, 'must not mark newer unreceived messages as read');
+    const backwards = await request(`/chat/conversations/${conversationId}/read`, 'POST', { lastReadMessageId: Number(a.message.id) }, owner);
+    assert.equal(backwards.body.data.lastReadMessageId, cursor, 'old cursor cannot regress');
+    const otherConv = await request('/chat/conversations', 'POST', { peerUserId: outsider.id }, owner);
+    assert.equal((await request(`/chat/conversations/${otherConv.body.data.id}/read`, 'POST', { lastReadMessageId: cursor }, owner)).status, 400, 'cursor must belong to the conversation');
   } finally { ownerSocket.terminate(); tenantSocket.terminate(); outsiderSocket.terminate(); }
   assert.equal((await request('/users/me', 'PATCH', { phone: '19900000015' }, owner)).status, 200);
   assert.equal((await request('/users/me/password', 'PATCH', { oldPassword: 'wrong', newPassword: password + 'x' }, owner)).status, 400);
-  console.log(JSON.stringify({ passed: ['fresh schema and guarded seed', 'registration/hash/login', 'publishing/ownership/validation', 'detail/filter', 'idempotent favorites/isolation', 'concurrent conversation uniqueness', 'HTTP/WS outsider denial', 'null frame/ping', 'bidirectional WS persistence', 'history pagination/unread/read', 'profile/password boundary'], realModelCalls: 0, existingDatabaseWrites: 0 }));
+  console.log(JSON.stringify({ passed: ['fresh schema and guarded seed', 'registration/hash/login', 'publishing/ownership/validation', 'detail/filter', 'idempotent favorites/isolation', 'concurrent conversation uniqueness', 'HTTP/WS outsider denial', 'null frame/ping', 'bidirectional WS persistence', 'history pagination/unread/read', '12 ordered WS sends', 'read cursor isolation/monotonicity/7-unreceived-unread', 'profile/password boundary'], realModelCalls: 0, existingDatabaseWrites: 0 }));
 }
 if (require.main === module) withBusinessSandbox(businessChecks, { database: process.argv.find(arg => arg.startsWith('--database='))?.slice('--database='.length), confirmEmpty: process.argv.includes('--confirm-empty-test-db') }).catch(error => { console.error(error instanceof Error && !('sql' in error) ? error.message : `临时库业务验收失败，错误码 ${(error as { code?: string })?.code || 'UNKNOWN'}（未输出连接信息或 SQL）。`); process.exitCode = 1; });

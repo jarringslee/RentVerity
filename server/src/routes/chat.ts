@@ -174,7 +174,7 @@ router.get('/unread-total', requireAuth, async (req, res) => {
   }
 });
 
-/** 将会话标记为已读到当前最新消息 */
+/** 新客户端只确认实际展示的游标；保留旧客户端空正文标记到最新的兼容行为。 */
 router.post('/conversations/:id/read', requireAuth, async (req, res) => {
   try {
     const me = (req as any).userId as number;
@@ -191,12 +191,19 @@ router.post('/conversations/:id/read', requireAuth, async (req, res) => {
       return res.status(404).json({ success: false, message: '会话不存在' });
     }
 
-    const [maxRows] = await pool.query(
-      'SELECT COALESCE(MAX(id), 0) AS mx FROM chat_messages WHERE conversation_id = ?',
-      [convId]
-    );
-    const mx =
-      Array.isArray(maxRows) && maxRows.length > 0 ? Number((maxRows[0] as any).mx) || 0 : 0;
+    const explicit = req.body?.lastReadMessageId;
+    let mx: number;
+    if (explicit !== undefined) {
+      if (typeof explicit !== 'number' || !Number.isSafeInteger(explicit) || explicit < 0) return res.status(400).json({ success: false, message: '已读游标必须为非负整数。' });
+      if (explicit > 0) {
+        const [found] = await pool.query('SELECT id FROM chat_messages WHERE conversation_id = ? AND id = ? LIMIT 1', [convId, explicit]);
+        if (!Array.isArray(found) || found.length === 0) return res.status(400).json({ success: false, message: '已读游标不属于该会话。' });
+      }
+      mx = explicit;
+    } else {
+      const [maxRows] = await pool.query('SELECT COALESCE(MAX(id), 0) AS mx FROM chat_messages WHERE conversation_id = ?', [convId]);
+      mx = Array.isArray(maxRows) && maxRows.length > 0 ? Number((maxRows[0] as any).mx) || 0 : 0;
+    }
 
     await pool.query(
       `INSERT INTO chat_user_state (user_id, conversation_id, last_read_message_id)
@@ -205,7 +212,9 @@ router.post('/conversations/:id/read', requireAuth, async (req, res) => {
       [me, convId, mx, mx]
     );
 
-    return res.json({ success: true, message: 'ok', data: { lastReadMessageId: mx } });
+    const [state] = await pool.query('SELECT last_read_message_id FROM chat_user_state WHERE user_id = ? AND conversation_id = ?', [me, convId]);
+    const cursor = Array.isArray(state) && state.length ? Number((state[0] as any).last_read_message_id) : mx;
+    return res.json({ success: true, message: 'ok', data: { lastReadMessageId: cursor } });
   } catch (err) {
     logSafeError(err);
     return res.status(500).json({ success: false, message: '标记已读失败' });
