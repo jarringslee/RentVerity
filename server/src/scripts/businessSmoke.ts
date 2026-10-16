@@ -73,12 +73,14 @@ async function businessChecks({ base, password, query }: Sandbox) {
   assert.equal((await request('/users/me', 'GET', undefined, owner)).body.data.id, owner.id);
   assert.equal((await request('/users/me', 'PATCH', undefined, owner)).status, 400);
   assert.equal((await request('/users/me/password', 'PATCH', undefined, owner)).status, 400);
-  const house = { title: '[验收] 高新区一居室', price: 2900, location: '演示位置', lng: 108.94, lat: 34.25, description: '合成业务测试房源', tags: ['验收'], area: 45 };
+  const house = { title: '[验收] 高新区一居室', city: '西安市', houseType: '一居室', price: 2900, location: '演示位置', lng: 108.94, lat: 34.25, description: '合成业务测试房源', tags: ['验收'], area: 45 };
   assert.equal((await request('/houses', 'POST', house)).status, 401);
-  for (const patch of [{ price: -1 }, { price: 2900.5 }, { area: 45.5 }, { price: '2900' }, { lng: 108.94, lat: null }, { owner_user_id: outsider.id }, { riskLevel: 'low' }]) assert.equal((await request('/houses', 'POST', { ...house, ...patch }, owner)).status, 400);
+  for (const patch of [{ city: undefined }, { city: '高新区' }, { houseType: undefined }, { houseType: '城堡' }, { price: -1 }, { price: 2900.5 }, { area: 45.5 }, { price: '2900' }, { lng: 108.94, lat: null }, { owner_user_id: outsider.id }, { riskLevel: 'low' }]) assert.equal((await request('/houses', 'POST', { ...house, ...patch }, owner)).status, 400);
   const published = await request('/houses', 'POST', house, owner); assert.equal(published.status, 200);
   const houseId = published.body.data.id;
   const detail = await request(`/houses/${houseId}`); assert.equal(detail.body.data.owner_user_id, owner.id); assert.equal(Number(detail.body.data.price), 2900);
+  assert.equal(detail.body.data.city, '西安市'); assert.equal(detail.body.data.house_type, '一居室');
+  assert.equal((await request('/houses?city=' + encodeURIComponent('北京'))).body.data.total, 0);
   assert.equal((await request('/houses/-1')).status, 400); assert.equal((await request('/houses/99999999')).status, 404);
   const filtered = await request('/houses?location=' + encodeURIComponent('高新区') + '&minPrice=2900&maxPrice=3000&bounds=108.9,34.2,109,34.3'); assert.equal(filtered.body.data.total, 1);
   assert.equal((await request('/favorites/99999999', 'POST', undefined, tenant)).status, 404);

@@ -30,9 +30,9 @@ export async function seedDemoDatabase(connection: Connection, name: string, pas
   try {
     const [result] = await connection.query("INSERT INTO users (username, phone, password_hash, gender) VALUES ('demo_landlord', '19900000001', ?, 'male'), ('demo_tenant', '19900000002', ?, 'female')", [hash, hash]);
     const landlordId = (result as { insertId: number }).insertId;
-    await connection.query(`INSERT INTO houses (title, price, location, lng, lat, description, image, tags, area, owner_user_id, landlord_name) VALUES
-      ('[演示] 高新区一居室', 2800, '西安市高新区（演示位置）', 108.94, 34.25, '仅供学习，坐标为演示点，不是可租赁的真实房源。', '/images/houses/house-1.jpg', '演示数据', 50, ?, '演示房东'),
-      ('[演示] 两居室', 4200, '西安市（演示位置）', 108.98, 34.27, '仅供学习，坐标为演示点，不是可租赁的真实房源。', '/images/houses/house-2.jpg', '演示数据', 80, ?, '演示房东')`, [landlordId, landlordId]);
+    await connection.query(`INSERT INTO houses (title, city, house_type, price, location, lng, lat, description, image, tags, area, owner_user_id, landlord_name) VALUES
+      ('[演示] 高新区一居室', '西安市', '一居室', 2800, '西安市高新区（演示位置）', 108.94, 34.25, '仅供学习，坐标为演示点，不是可租赁的真实房源。', '/images/houses/house-1.jpg', '演示数据', 50, ?, '演示房东'),
+      ('[演示] 两居室', '西安市', '两居室', 4200, '西安市（演示位置）', 108.98, 34.27, '仅供学习，坐标为演示点，不是可租赁的真实房源。', '/images/houses/house-2.jpg', '演示数据', 80, ?, '演示房东')`, [landlordId, landlordId]);
     await connection.commit();
   } catch (error) { await connection.rollback(); throw error; }
 }

@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { AppError } from '../utils/AppError';
+import { normalizeHouseCity } from './catalog';
 
 export const HOUSE_TYPES = ['一居室', '两居室', '三居室', '合租'] as const;
 const shape = {
+  city: z.string().trim().max(64).refine(value => !value || !!normalizeHouseCity(value), '城市无效').transform(value => normalizeHouseCity(value) ?? '').optional(),
   location: z.string().trim().max(80).default(''),
   minPrice: z.number().finite().min(0).max(1000000).optional(),
   maxPrice: z.number().finite().min(0).max(1000000).optional(),
@@ -31,7 +33,7 @@ export function parseHouseFilters(input: unknown): HouseFilters {
 }
 
 export function parseHouseQuery(raw: Record<string, unknown>): HouseQuery {
-  const allowed = new Set(['location', 'minPrice', 'maxPrice', 'houseTypes', 'page', 'pageSize', 'sort', 'bounds']);
+  const allowed = new Set(['city', 'location', 'minPrice', 'maxPrice', 'houseTypes', 'page', 'pageSize', 'sort', 'bounds']);
   const input: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (!allowed.has(key) || typeof value !== 'string') throw new AppError(400, 'HOUSE_QUERY_INVALID', '不支持的筛选参数或参数格式。');
@@ -57,6 +59,7 @@ const orderBy = { latest: 'created_at DESC, id DESC', price_asc: 'price ASC, id 
 export function buildHouseSearchSql(query: HouseQuery) {
   const clauses: string[] = [];
   const params: unknown[] = [];
+  if (query.city) { clauses.push('city = ?'); params.push(query.city); }
   if (query.location) {
     clauses.push("(location LIKE ? ESCAPE '!' OR title LIKE ? ESCAPE '!')");
     params.push(likeValue(query.location), likeValue(query.location));
@@ -64,8 +67,8 @@ export function buildHouseSearchSql(query: HouseQuery) {
   if (query.minPrice !== undefined) { clauses.push('price >= ?'); params.push(query.minPrice); }
   if (query.maxPrice !== undefined) { clauses.push('price <= ?'); params.push(query.maxPrice); }
   if (query.houseTypes.length) {
-    clauses.push(`(${query.houseTypes.map(() => "title LIKE ? ESCAPE '!'").join(' OR ')})`);
-    params.push(...query.houseTypes.map(likeValue));
+    clauses.push(`house_type IN (${query.houseTypes.map(() => '?').join(', ')})`);
+    params.push(...query.houseTypes);
   }
   if (query.bounds) {
     // 坐标为百度 BD-09；没有坐标的房源不会冒充视野内候选，仍可在不限视野列表查看。

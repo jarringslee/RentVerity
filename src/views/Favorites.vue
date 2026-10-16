@@ -19,7 +19,7 @@
             <el-card class="house-card">
               <el-row :gutter="20">
                 <el-col :span="24" :md="8">
-                  <img :src="house.image" :alt="house.title" class="house-image" @error="handleImageError">
+                  <img :src="house.image" :alt="house.title" class="house-image" loading="lazy" decoding="async" @error="handleImageError">
                 </el-col>
                 <el-col :span="24" :md="16">
                   <div class="house-info">

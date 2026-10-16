@@ -71,7 +71,7 @@
                 <div class="filter-section">
                   <h4>排序</h4>
                   <el-select v-model="filters.sort" style="width: 100%"><el-option label="最新发布" value="latest" /><el-option label="租金从低到高" value="price_asc" /><el-option label="租金从高到低" value="price_desc" /></el-select>
-                  <p class="filter-hint">房型按标题关键词匹配，请在详情或看房时核实。</p>
+                  <p class="filter-hint">{{ filters.city ? '当前城市：' + filters.city + '；' : '' }}房型使用结构化字段，旧数据未知房型不计入限定房型结果；实际情况请看房核实。</p>
                 </div>
 
                 <el-button
@@ -124,6 +124,8 @@
                                     :src="getHouseImage(house.image)"
                                     :alt="house.title"
                                     class="house-image"
+                                    loading="lazy"
+                                    decoding="async"
                                     @error="handleImageError"
                                   />
                                 </el-col>
@@ -247,6 +249,7 @@ let controller: AbortController | null = null;
 let requestVersion = 0;
 
 function syncDraft(query: HouseQuery) {
+  filters.city = query.city;
   filters.location = query.location;
   filters.minPrice = query.minPrice;
   filters.maxPrice = query.maxPrice;

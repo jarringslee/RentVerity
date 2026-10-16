@@ -11,14 +11,17 @@
   },
   "dependencies": {
     "axios": "^1.13.2",
+    "dompurify": "^3.4.17",
     "element-china-area-data": "^6.1.0",
     "element-plus": "^2.12.0",
+    "markdown-it": "^15.0.2",
     "pdfjs-dist": "^6.4.299",
     "unsplash-js": "^7.0.20",
     "vue": "^3.5.0",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
     "@types/node": "^22.10.0",
     "@vitejs/plugin-vue": "^5.2.0",
     "@vue/tsconfig": "^0.7.0",

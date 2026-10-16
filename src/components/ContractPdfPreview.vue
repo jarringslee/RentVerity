@@ -16,6 +16,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { getDocument, GlobalWorkerOptions, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import { CONTRACT_FILE_LIMITS } from '../utils/contractFile'
 
 GlobalWorkerOptions.workerSrc = workerUrl
 const props = defineProps<{ file: File; page: number }>()
@@ -48,7 +49,9 @@ function renderPage() {
       if (version !== renderVersion || document !== currentDocument || !canvas.value) return
       const baseViewport = page.getViewport({ scale: 1 })
       const width = Math.max(180, (container.value?.clientWidth || 600) - 24)
-      const scale = Math.min(1.7, width / baseViewport.width)
+      if (!Number.isFinite(baseViewport.width) || !Number.isFinite(baseViewport.height) || baseViewport.width <= 0 || baseViewport.height <= 0) throw new Error('Invalid page size')
+      // 限制极端页面长宽与高 DPR 下的 canvas 分配，不把 PDF 内嵌脚本/链接挂入 DOM。
+      const scale = Math.min(1.7, width / baseViewport.width, 1600 / baseViewport.height, 1600 / baseViewport.width)
       const viewport = page.getViewport({ scale })
       const outputScale = Math.min(window.devicePixelRatio || 1, 2)
       canvas.value.width = Math.floor(viewport.width * outputScale)
@@ -68,6 +71,7 @@ watch(() => props.file, async file => {
   ++renderVersion
   renderTask?.cancel()
   document = null
+  if (canvas.value) { canvas.value.width = 0; canvas.value.height = 0 }
   pageCount.value = 0
   error.value = ''
   loading.value = true
@@ -82,6 +86,7 @@ watch(() => props.file, async file => {
     loadingTask = currentTask
     const pdf = await currentTask.promise
     if (version !== loadVersion) { await currentTask.destroy(); return }
+    if (pdf.numPages > CONTRACT_FILE_LIMITS.maxPages) { await currentTask.destroy(); throw new Error('Page limit') }
     document = pdf
     pageCount.value = pdf.numPages
     renderPage()

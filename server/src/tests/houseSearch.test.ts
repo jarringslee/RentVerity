@@ -16,6 +16,13 @@ test('price upper bound can be omitted and zero is not treated as missing', () =
   assert.equal(parseHouseQuery({ maxPrice: '0' }).maxPrice, 0);
 });
 
+test('city is normalized and bound independently from address; room type is not guessed by SQL title matching', () => {
+  const plan = buildHouseSearchSql(parseHouseQuery({ city: '西安', location: '高新区', houseTypes: '一居室,两居室' }));
+  assert.match(plan.listSql, /city = \?/); assert.match(plan.listSql, /house_type IN \(\?, \?\)/);
+  assert.deepEqual(plan.countParams, ['西安市', '%高新区%', '%高新区%', '一居室', '两居室']);
+  assert.throws(() => parseHouseQuery({ city: '高新区' }), AppError);
+});
+
 test('invalid prices, pagination, repeated fields and sorting are rejected', () => {
   for (const input of [
     { minPrice: '4000', maxPrice: '0' }, { minPrice: '-1' }, { maxPrice: 'Infinity' },

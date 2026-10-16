@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
+import userStore from '../stores/userStore'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -50,21 +51,25 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/chat',
     name: 'Chat',
+    meta: { requiresAuth: true },
     component: () => import('../views/Chat.vue')
   },
   {
     path: '/favorites',
     name: 'Favorites',
+    meta: { requiresAuth: true },
     component: () => import('../views/Favorites.vue')
   },
   {
     path: '/profile',
     name: 'Profile',
+    meta: { requiresAuth: true },
     component: () => import('../views/Profile.vue')
   },
   {
     path: '/publish',
     name: 'PublishHouse',
+    meta: { requiresAuth: true },
     component: () => import('../views/PublishHouse.vue')
   }
 ]
@@ -72,6 +77,10 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.beforeEach(to => {
+  if (to.meta.requiresAuth && !userStore.getToken()) return { path: '/login', query: { redirect: to.fullPath } }
 })
 
 export default router

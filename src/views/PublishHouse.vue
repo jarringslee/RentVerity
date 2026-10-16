@@ -31,6 +31,13 @@
               />
             </el-form-item>
 
+            <el-form-item label="城市" prop="city">
+              <el-select id="publish-city" v-model="form.city" filterable placeholder="请选择房源所在城市" style="width: 100%" :loading="citiesLoading"><el-option v-for="city in cities" :key="city" :label="city" :value="city" /></el-select>
+              <el-button v-if="citiesError" link type="danger" @click="loadCities">城市列表加载失败，点击重试</el-button>
+            </el-form-item>
+            <el-form-item label="房型" prop="houseType">
+              <el-select id="publish-house-type" v-model="form.houseType" placeholder="请选择实际房型" style="width: 100%"><el-option v-for="type in HOUSE_TYPES" :key="type" :label="type" :value="type" /></el-select>
+            </el-form-item>
             <el-form-item label="位置" prop="location">
               <el-input
                 v-model="form.location"
@@ -117,22 +124,33 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, computed } from 'vue'
+import { reactive, ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import type { FormInstance, FormRules } from 'element-plus'
-import { publishHouse } from '../services/api'
+import { publishHouse, getHouseCities } from '../services/api'
+import { HOUSE_TYPES } from '../types/houses'
 import userStore from '../stores/userStore'
 import HeaderUserMenu from '../components/HeaderUserMenu.vue'
 
 const router = useRouter()
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
+const cities = ref<string[]>([]), citiesLoading = ref(false), citiesError = ref(false)
+async function loadCities() {
+  citiesLoading.value = true; citiesError.value = false
+  try { const response = await getHouseCities(); if (!response.success || !Array.isArray(response.data)) throw new Error(); cities.value = response.data }
+  catch { citiesError.value = true }
+  finally { citiesLoading.value = false }
+}
+onMounted(loadCities)
 
 const isLoggedIn = computed(() => userStore.isLoggedIn())
 
 const form = reactive({
   title: '',
+  city: '',
+  houseType: '',
   price: 1000,
   location: '',
   description: '',
@@ -146,6 +164,8 @@ const form = reactive({
 })
 
 const rules: FormRules = {
+  city: [{ required: true, message: '请选择城市', trigger: 'change' }],
+  houseType: [{ required: true, message: '请选择实际房型', trigger: 'change' }],
   title: [{ required: true, message: '请输入房源标题', trigger: 'blur' }],
   price: [{ required: true, message: '请输入价格', trigger: 'change' }],
   location: [{ required: true, message: '请输入位置', trigger: 'blur' }]
@@ -170,7 +190,7 @@ function geocodeLocation(address: string): Promise<{ lng: number; lat: number } 
           finish(null)
         }
       },
-      '西安市'
+      form.city
     )
   })
 }

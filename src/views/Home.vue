@@ -57,7 +57,7 @@
         >
           <el-card style="margin-bottom: 20px">
             <h2>AI 租房助手</h2>
-            <p>用一句话描述预算、区域和房型，确认条件后检索真实房源；也可咨询看房准备与租房流程。</p>
+            <p>告诉 AI 城市和偏好，自动检索数据库房源；也可咨询看房准备与租房流程。</p>
             <el-button type="primary" @click="router.push('/ai-assistant')">进入 AI 助手</el-button>
           </el-card>
           <el-card>

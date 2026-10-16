@@ -10,6 +10,7 @@ import { buildContractMessages, verifyContractAnalysis, type ContractAnalysis } 
 import { ContractSessionStore } from '../contracts/sessionStore';
 import { createContractsRouter } from '../routes/contracts';
 import { makePdf } from './pdfFixture';
+import { ContractUploadGate, UPLOAD_LIMITS } from '../contracts/uploadGate';
 
 const pages = [{ page: 1, text: 'Tenant must pay a deposit of 2000 yuan.' }, { page: 2, text: 'The deposit is not refundable.\nRent is due on day 1.' }];
 const finding = { severity: 'high', category: 'Deposit', quote: 'The deposit is not refundable.', page: 2, reason: 'Confirm the refund condition.', suggestion: 'Agree a refund condition.' };
@@ -20,11 +21,102 @@ test('PDF validation rejects disguised, empty, and oversized files', () => {
   assert.doesNotThrow(() => validatePdfFile({ buffer: pdf, originalname: 'contract.pdf', mimetype: 'application/pdf' }));
   for (const file of [
     { buffer: Buffer.from('not a pdf'), originalname: 'contract.pdf', mimetype: 'application/pdf' },
+    { buffer: Buffer.concat([Buffer.from('<script>bad</script>'), pdf]), originalname: 'contract.pdf', mimetype: 'application/pdf' },
     { buffer: pdf, originalname: 'contract.docx', mimetype: 'application/pdf' },
     { buffer: pdf, originalname: 'contract.pdf', mimetype: 'image/png' },
     { buffer: Buffer.alloc(0), originalname: 'contract.pdf', mimetype: 'application/pdf' },
     { buffer: Buffer.alloc(PDF_LIMITS.maxBytes + 1), originalname: 'contract.pdf', mimetype: 'application/pdf' }
   ]) assert.throws(() => validatePdfFile(file), AppError);
+});
+
+test('upload admission caps per-user/IP frequency, global concurrency and releases idempotently', () => {
+  let now = 0;
+  const gate = new ContractUploadGate(() => now);
+  const release = gate.acquire(1, 'local');
+  assert.throws(() => gate.acquire(1, 'local'), (e: AppError) => e.code === 'PDF_BUSY');
+  const other = [2, 3, 4].map(id => gate.acquire(id, 'local'));
+  assert.throws(() => gate.acquire(5, 'local'), (e: AppError) => e.code === 'PDF_BUSY');
+  release(); release();
+  const next = gate.acquire(5, 'local');
+  next(); other.forEach(done => done());
+  now += UPLOAD_LIMITS.windowMs;
+  for (let n = 0; n < UPLOAD_LIMITS.perUser; n++) gate.acquire(1, 'local')();
+  assert.throws(() => gate.acquire(1, 'local'), (e: AppError) => e.code === 'UPLOAD_RATE_LIMIT');
+  now += UPLOAD_LIMITS.windowMs;
+  for (let id = 1; id <= UPLOAD_LIMITS.perIp; id++) gate.acquire(id, 'local')();
+  assert.throws(() => gate.acquire(100, 'local'), (e: AppError) => e.code === 'UPLOAD_RATE_LIMIT');
+  now += UPLOAD_LIMITS.windowMs;
+  assert.doesNotThrow(() => gate.acquire(100, 'local')());
+});
+
+test('HTTP admission precedes Multer buffering and holds the parse slot after disconnect', async t => {
+  process.env.JWT_SECRET = 'rentverity-test-only-secret';
+  const gate = new ContractUploadGate();
+  let finishParse!: () => void, markStarted!: () => void;
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  const blocked = new Promise<void>(resolve => { finishParse = resolve; });
+  let calls = 0;
+  const app = express();
+  app.use('/contracts', createContractsRouter({ uploadGate: gate, parsePdf: async () => {
+    calls++; markStarted(); await blocked;
+    return { pages, pageCount: 2, characterCount: 100 };
+  } }));
+  const server = http.createServer(app);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { finishParse(); server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())); });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/contracts/parse`;
+  const auth = { Authorization: `Bearer ${jwt.sign({ userId: 11 }, process.env.JWT_SECRET!)}` };
+  const form = () => { const data = new FormData(); data.append('file', new Blob([Uint8Array.from(makePdf(['Synthetic contract text.']))], { type: 'application/pdf' }), 'test.pdf'); return data; };
+  const controller = new AbortController();
+  const first = fetch(base, { method: 'POST', headers: auth, body: form(), signal: controller.signal }).catch(() => null);
+  await started;
+  // 没有发送任何正文、甚至不是 multipart：应由准入返回 429 而非进入 Multer/文件校验。
+  const rejected = await fetch(base, { method: 'POST', headers: auth });
+  assert.equal(rejected.status, 429);
+  assert.equal((await rejected.json() as { code: string }).code, 'PDF_BUSY');
+  assert.equal(rejected.headers.get('retry-after'), '2');
+  controller.abort(); await first;
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.throws(() => gate.acquire(11, 'another-ip'), (e: AppError) => e.code === 'PDF_BUSY', 'disconnect must not release a running parser');
+  finishParse();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal((await fetch(base, { method: 'POST', headers: auth, body: form() })).status, 200);
+  assert.equal(calls, 2);
+});
+
+test('HTTP invalid uploads and stalled/aborted connections release their admission slot', async t => {
+  process.env.JWT_SECRET = 'rentverity-test-only-secret';
+  let calls = 0;
+  const app = express();
+  app.use('/contracts', createContractsRouter({ uploadTimeoutMs: 100, parsePdf: async () => { calls++; return { pages, pageCount: 2, characterCount: 100 }; } }));
+  const server = http.createServer(app);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())); });
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/contracts/parse`;
+  const auth = (id: number) => ({ Authorization: `Bearer ${jwt.sign({ userId: id }, process.env.JWT_SECRET!)}` });
+  const upload = (id: number, filename: string) => {
+    const form = new FormData(); form.append('file', new Blob([Uint8Array.from(makePdf(['Synthetic contract text.']))], { type: 'application/pdf' }), filename);
+    return fetch(base, { method: 'POST', headers: auth(id), body: form });
+  };
+  assert.equal((await upload(21, 'bad.docx')).status, 400);
+  assert.equal(calls, 0, 'early extension filter does not parse the body');
+  assert.equal((await upload(21, 'good.pdf')).status, 200);
+  const stalled = await new Promise<number>((resolve, reject) => {
+    const request = http.request(base, { method: 'POST', headers: { ...auth(22), 'Content-Type': 'multipart/form-data; boundary=slow' } }, response => {
+      response.resume(); response.on('end', () => { request.destroy(); resolve(response.statusCode!); });
+    });
+    request.on('error', reject);
+    request.write('--slow\r\nContent-Disposition: form-data; name="file"; filename="slow.pdf"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.4\n');
+  });
+  assert.equal(stalled, 408);
+  assert.equal((await upload(22, 'retry.pdf')).status, 200, 'upload timeout frees admission');
+  await new Promise<void>(resolve => {
+    const request = http.request(base, { method: 'POST', headers: { ...auth(23), 'Content-Type': 'multipart/form-data; boundary=abort' } });
+    request.on('error', () => {});
+    server.once('request', (_req, response) => { response.once('close', resolve); setTimeout(() => request.destroy(), 10); });
+    request.write('--abort\r\n');
+  });
+  assert.equal((await upload(23, 'retry.pdf')).status, 200, 'aborted upload frees admission');
 });
 
 test('PDF.js extracts genuine per-page text and rejects blank, excessive, or broken PDFs', async t => {

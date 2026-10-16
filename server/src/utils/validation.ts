@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { AppError } from './AppError';
+import { normalizeHouseCity } from '../houses/catalog';
+import { HOUSE_TYPES } from '../houses/filters';
 
 export function positiveId(value: unknown): number | null {
   if (typeof value !== 'number' && (typeof value !== 'string' || !/^[1-9]\d*$/.test(value))) return null;
@@ -16,6 +18,8 @@ export const loginSchema = z.object({ username: z.string().trim().min(1).max(50)
 const optionalText = (length: number) => z.string().trim().max(length).optional();
 const coordinate = (min: number, max: number) => z.number().finite().min(min).max(max).nullable().optional();
 export const publishSchema = z.strictObject({
+  city: z.string().trim().refine(value => !!normalizeHouseCity(value), '请选择城市').transform(value => normalizeHouseCity(value)!),
+  houseType: z.enum(HOUSE_TYPES),
   title: z.string().trim().min(1).max(120), price: z.number().int().positive().max(1000000),
   location: z.string().trim().min(1).max(255), lng: coordinate(70, 140), lat: coordinate(10, 55),
   description: optionalText(10000), image: z.string().trim().max(255).refine(value => !value || /^\/images\/[^\s]+$/.test(value) || /^https?:\/\/[^\s]+$/i.test(value)).optional(),

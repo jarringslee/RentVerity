@@ -11,6 +11,7 @@ const amount = (value: unknown) => {
 export function houseQueryFromUrl(query: Record<string, unknown>): HouseQuery {
   const sort = scalar(query.sort)
   return {
+    ...(query.city === undefined ? {} : { city: (scalar(query.city) ?? '\u0000').trim() }),
     location: (scalar(query.location) || '').trim().slice(0, 80),
     minPrice: amount(scalar(query.minPrice)), maxPrice: amount(scalar(query.maxPrice)),
     houseTypes: [...new Set((scalar(query.houseTypes) || '').split(',').filter(Boolean))] as HouseType[],
@@ -23,6 +24,7 @@ export function houseQueryFromUrl(query: Record<string, unknown>): HouseQuery {
 
 export function houseFiltersToQuery(filters: Partial<HouseQuery>): Record<string, string> {
   const query: Record<string, string> = {}
+  if (filters.city?.trim()) query.city = filters.city.trim()
   if (filters.location?.trim()) query.location = filters.location.trim()
   if (filters.minPrice !== undefined && filters.minPrice !== null) query.minPrice = String(filters.minPrice)
   if (filters.maxPrice !== undefined && filters.maxPrice !== null) query.maxPrice = String(filters.maxPrice)
@@ -47,6 +49,7 @@ export function validMapBounds(bounds?: MapBounds): boolean {
 }
 
 export function validateHouseFilters(filters: HouseFilters): string | null {
+  if (filters.city != null && (typeof filters.city !== 'string' || filters.city.length > 64 || /[\u0000-\u001f]/.test(filters.city))) return '城市格式不正确或 URL 含重复城市参数。'
   for (const value of [filters.minPrice, filters.maxPrice]) {
     if (value !== undefined && value !== null && (!Number.isFinite(value) || value < 0 || value > 1000000)) return '租金应为 0—1000000 之间的数字。'
   }
@@ -56,10 +59,10 @@ export function validateHouseFilters(filters: HouseFilters): string | null {
 }
 
 export function cloneHouseFilters(filters: HouseFilters): HouseFilters {
-  return { location: filters.location, ...(filters.minPrice == null ? {} : { minPrice: filters.minPrice }), ...(filters.maxPrice == null ? {} : { maxPrice: filters.maxPrice }), houseTypes: [...filters.houseTypes] }
+  return { ...(filters.city ? { city: filters.city } : {}), location: filters.location, ...(filters.minPrice == null ? {} : { minPrice: filters.minPrice }), ...(filters.maxPrice == null ? {} : { maxPrice: filters.maxPrice }), houseTypes: [...filters.houseTypes] }
 }
 
 export function describeHouseFilters(filters: HouseFilters): string {
   const price = filters.minPrice == null && filters.maxPrice == null ? '租金不限' : `${filters.minPrice ?? 0}—${filters.maxPrice ?? '不限'} 元/月`
-  return `${filters.location || '区域不限'} · ${price} · ${filters.houseTypes.join('、') || '房型不限'}`
+  return `${filters.city ? filters.city + ' · ' : ''}${filters.location || '地段不限'} · ${price} · ${filters.houseTypes.join('、') || '房型不限'}`
 }

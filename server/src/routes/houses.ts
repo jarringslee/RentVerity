@@ -6,9 +6,11 @@ import { parseHouseQuery } from '../houses/filters';
 import { houseRepository, type HouseRepository } from '../houses/repository';
 import { AppError } from '../utils/AppError';
 import { positiveId, publishSchema, parseInput } from '../utils/validation';
+import { HOUSE_CITIES } from '../houses/catalog';
 
 export function createHousesRouter(repository: HouseRepository = houseRepository) {
 const router = Router();
+router.get('/cities', (_req, res) => res.json({ success: true, data: HOUSE_CITIES }));
 
 // 获取房源列表（简单分页）
 router.get('/', async (req, res) => {
@@ -60,6 +62,8 @@ router.post('/', requireAuth, async (req, res) => {
   try {
     const {
       title,
+      city,
+      houseType,
       price,
       location,
       lng,
@@ -72,7 +76,7 @@ router.post('/', requireAuth, async (req, res) => {
       orientation,
       landlordName,
       landlordPhone
-    } = parseInput(publishSchema, req.body, '房源字段无效：租金和面积须为正整数，标题和位置必填；请检查坐标、标签、图片地址及联系方式。');
+    } = parseInput(publishSchema, req.body, '房源字段无效：城市、房型、标题和位置必填，租金和面积须为正整数；请检查坐标、标签、图片地址及联系方式。');
 
     if (!title || !price || !location) {
       return res.status(400).json({
@@ -87,11 +91,13 @@ router.post('/', requireAuth, async (req, res) => {
     const [result] = await pool.query(
       `
       INSERT INTO houses 
-      (title, price, location, lng, lat, description, image, tags, area, floor, orientation, landlord_name, landlord_phone, owner_user_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (title, city, house_type, price, location, lng, lat, description, image, tags, area, floor, orientation, landlord_name, landlord_phone, owner_user_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         title,
+        city,
+        houseType,
         price,
         location,
         lngVal,

@@ -11,7 +11,7 @@ test('ids and registration reject non-scalars and bcrypt truncation', () => {
   assert.equal(passwordSchema.safeParse('字'.repeat(24)).success, true);
 });
 test('publishing rejects invalid amounts, coordinates, ownership spoofing and fake risk ratings', () => {
-  const good = { title: '演示一居室', price: 2800, location: '演示位置' };
+  const good = { title: '演示一居室', city: '西安市', houseType: '一居室', price: 2800, location: '演示位置' };
   assert.equal(publishSchema.safeParse(good).success, true);
   for (const patch of [{ price: 0 }, { price: -1 }, { price: 2800.5 }, { area: 40.5 }, { price: Infinity }, { price: '2800' }, { lng: 108 }, { lng: Infinity, lat: 34 }, { owner_user_id: 2 }, { riskLevel: 'low' }, { title: '  ' }, { image: 'javascript:alert(1)' }, { image: 'https://example.com/' + 'x'.repeat(255) }, { tags: 'not-an-array' }, { tags: Array(12).fill('x'.repeat(24)) }]) assert.equal(publishSchema.safeParse({ ...good, ...patch }).success, false);
 });

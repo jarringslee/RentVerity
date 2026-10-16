@@ -15,7 +15,7 @@
             <el-form-item label="最高月租（元）"><el-input-number id="map-max-price" v-model="draft.maxPrice" :min="0" :max="1000000" controls-position="right" placeholder="不限" /></el-form-item>
             <el-form-item label="房型"><el-checkbox-group v-model="draft.houseTypes"><el-checkbox v-for="type in HOUSE_TYPES" :key="type" :value="type">{{ type }}</el-checkbox></el-checkbox-group></el-form-item>
           </el-form>
-          <p class="muted">房型按标题关键词匹配。地图只展示有坐标的候选；旧数据中有演示坐标，并非核实过的实际地址。</p>
+          <p class="muted">房型使用结构化字段，未知房型不计入限定结果。地图只展示有坐标的候选；旧数据中有演示坐标，并非核实过的实际地址。</p>
           <div class="filter-actions"><el-button type="primary" @click="applyFilters">应用筛选</el-button><el-button @click="resetFilters">重置条件</el-button><el-button @click="goListWithoutBounds">不限视野看列表</el-button></div>
         </el-card>
       </aside>
@@ -147,7 +147,7 @@ function applyFilters() {
   navigate({ ...houseFiltersToQuery({ ...applied.value, ...cloneHouseFilters(draft), minPrice: draft.minPrice ?? undefined, maxPrice: draft.maxPrice ?? undefined, page: 1 }), ...mapMetaFromUrl(route.query) }, true)
 }
 function resetFilters() {
-  Object.assign(draft, emptyHouseFilters(), { minPrice: undefined, maxPrice: undefined })
+  Object.assign(draft, emptyHouseFilters(), { city: undefined, minPrice: undefined, maxPrice: undefined })
   navigate({ ...mapMetaFromUrl(route.query), ...houseFiltersToQuery({ ...emptyHouseFilters(), bounds: validMapBounds(applied.value.bounds) ? applied.value.bounds : undefined }) }, true)
 }
 function goList() { router.push({ path: '/houses', query: { ...houseFiltersToQuery({ ...applied.value, page: 1, pageSize: 10 }), ...mapMetaFromUrl(route.query) } }) }
@@ -201,7 +201,7 @@ watch(() => route.query, (query, previous) => {
   if (route.path !== '/map') return
   const next = houseQueryFromUrl(query)
   applied.value = next
-  if (!previous || JSON.stringify(cloneHouseFilters(next)) !== JSON.stringify(cloneHouseFilters(houseQueryFromUrl(previous)))) Object.assign(draft, emptyHouseFilters(), cloneHouseFilters(next), { minPrice: next.minPrice, maxPrice: next.maxPrice })
+  if (!previous || JSON.stringify(cloneHouseFilters(next)) !== JSON.stringify(cloneHouseFilters(houseQueryFromUrl(previous)))) Object.assign(draft, emptyHouseFilters(), cloneHouseFilters(next), { city: next.city, minPrice: next.minPrice, maxPrice: next.maxPrice })
   selectedId.value = selectedHouseFromUrl(query)
   if (map && (!previous || query.center !== previous.center || query.zoom !== previous.zoom || (!query.center && query.bounds !== previous.bounds))) {
     const target = mapViewFromUrl(query, validMapBounds(next.bounds) ? next.bounds : undefined), current = map.getCenter()

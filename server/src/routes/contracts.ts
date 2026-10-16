@@ -5,33 +5,70 @@ import { AppError } from '../utils/AppError';
 import { completeConfiguredJson, type CompleteJson } from '../services/modelClient';
 import { analyzeContract } from '../contracts/analysis';
 import { ContractSessionStore } from '../contracts/sessionStore';
-import { PDF_LIMITS, parseContractPdf, validatePdfFile } from '../contracts/pdf';
+import { PDF_LIMITS, parseContractPdf, validatePdfFile, validatePdfMetadata } from '../contracts/pdf';
+import { ContractUploadGate, UPLOAD_LIMITS } from '../contracts/uploadGate';
 
 // 只保存短期页文本和结果，不把原合同写进 uploads 或磁盘。
-export function createContractsRouter(options: { completeJson?: CompleteJson; store?: ContractSessionStore } = {}) {
+export function createContractsRouter(options: { completeJson?: CompleteJson; store?: ContractSessionStore; uploadGate?: ContractUploadGate; parsePdf?: typeof parseContractPdf; uploadTimeoutMs?: number } = {}) {
   const router = Router();
   const store = options.store ?? new ContractSessionStore();
   const completeJson = options.completeJson ?? completeConfiguredJson;
-  const parsingUsers = new Set<number>();
-  const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: PDF_LIMITS.maxBytes, files: 1, fields: 0, parts: 2 } });
+  const gate = options.uploadGate ?? new ContractUploadGate();
+  const parsePdf = options.parsePdf ?? parseContractPdf;
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: PDF_LIMITS.maxBytes, files: 1, fields: 0, parts: 2, headerPairs: 30, fieldNameSize: 100 },
+    fileFilter: (_req, file, callback) => {
+      try { validatePdfMetadata(file); callback(null, true); }
+      catch (error) { callback(error as Error); }
+    }
+  }).single('file');
   router.use(requireAuth);
 
-  router.post('/parse', upload.single('file'), async (req, res, next) => {
+  router.post('/parse', (req, res, next) => {
     const userId = (req as unknown as { userId: number }).userId;
-    let started = false;
+    let release: () => void;
     try {
-      if (!req.file) throw new AppError(400, 'FILE_REQUIRED', '请选择一份文字型 PDF。');
-      if (parsingUsers.has(userId) || parsingUsers.size >= 4) throw new AppError(429, 'PDF_BUSY', '正在解析其他合同，请稍后重试。');
-      validatePdfFile(req.file);
-      parsingUsers.add(userId);
-      started = true;
-      const parsed = await parseContractPdf(req.file.buffer);
-      if (res.destroyed) return;
-      const filename = req.file.originalname.replace(/^.*[\\/]/, '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, 180);
-      const session = store.create(userId, filename, parsed);
-      res.json({ success: true, data: { documentId: session.id, filename, pageCount: parsed.pageCount, characterCount: parsed.characterCount, expiresAt: new Date(session.expiresAt).toISOString() } });
-    } catch (error) { next(error); }
-    finally { if (started) parsingUsers.delete(userId); }
+      release = gate.acquire(userId, req.ip ?? req.socket.remoteAddress ?? 'unknown');
+    } catch (error) {
+      if (error instanceof AppError && error.status === 429) res.setHeader('Retry-After', error.code === 'UPLOAD_RATE_LIMIT' ? '60' : '2');
+      next(error); return;
+    }
+    let parsing = false;
+    const close = () => { clearTimeout(timer); if (!parsing) release(); };
+    const timer = setTimeout(() => {
+      if (res.destroyed || res.writableEnded) return;
+      // 超时后关闭该上传连接，避免只释放槽位却继续接收正文。
+      res.setHeader('Connection', 'close');
+      res.once('finish', () => req.destroy());
+      res.status(408).json({ success: false, code: 'UPLOAD_TIMEOUT', message: '上传超过一分钟，请检查网络后重试。' });
+    }, options.uploadTimeoutMs ?? UPLOAD_LIMITS.timeoutMs);
+    timer.unref();
+    res.once('close', close);
+    try {
+      if (!req.is('multipart/form-data')) throw new AppError(400, 'FILE_REQUIRED', '请使用 multipart/form-data 上传一份 PDF。');
+      const length = Number(req.headers['content-length']);
+      if (Number.isFinite(length) && length > PDF_LIMITS.maxBytes + 16 * 1024) throw new AppError(413, 'FILE_SIZE', 'PDF 不能超过 10 MB。');
+      upload(req, res, error => {
+        clearTimeout(timer);
+        res.off('close', close);
+        if (error || res.destroyed || res.writableEnded) { release(); if (error && !res.destroyed) next(error); return; }
+        parsing = true;
+        // 断开连接后也等解析实际结束再释放，不能让取消绕过 CPU 并发限制。
+        void (async () => {
+          try {
+            if (!req.file) throw new AppError(400, 'FILE_REQUIRED', '请选择一份文字型 PDF。');
+            validatePdfFile(req.file);
+            const parsed = await parsePdf(req.file.buffer);
+            if (res.destroyed) return;
+            const filename = req.file.originalname.replace(/^.*[\\/]/, '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, 180);
+            const session = store.create(userId, filename, parsed);
+            res.json({ success: true, data: { documentId: session.id, filename, pageCount: parsed.pageCount, characterCount: parsed.characterCount, expiresAt: new Date(session.expiresAt).toISOString() } });
+          } catch (cause) { if (!res.destroyed) next(cause); }
+          finally { release(); }
+        })();
+      });
+    } catch (error) { clearTimeout(timer); res.off('close', close); release(); next(error); }
   });
 
   router.post('/analyze', async (req, res, next) => {

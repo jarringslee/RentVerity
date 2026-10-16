@@ -18,6 +18,8 @@ CREATE TABLE users (
 CREATE TABLE houses (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   title VARCHAR(120) NOT NULL,
+  city VARCHAR(64) NULL COMMENT '标准城市名；旧地址不明确时不猜测',
+  house_type VARCHAR(16) NULL COMMENT '结构化房型；NULL 为旧数据未知',
   price INT UNSIGNED NOT NULL,
   location VARCHAR(255) NOT NULL,
   lng DECIMAL(10,6) NULL COMMENT '百度 BD-09，NULL 为无坐标',
@@ -35,6 +37,7 @@ CREATE TABLE houses (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   KEY idx_house_created (created_at, id),
   KEY idx_house_price (price, id),
+  KEY idx_house_city_price (city, price, id),
   KEY idx_house_owner (owner_user_id),
   CONSTRAINT fk_house_owner FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

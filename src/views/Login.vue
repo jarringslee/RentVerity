@@ -20,7 +20,7 @@
         </el-form-item>
         
         <el-form-item>
-          <el-button type="primary" @click="handleLogin" style="width: 100%">登录</el-button>
+          <el-button type="primary" :loading="submitting" @click="handleLogin" style="width: 100%">登录</el-button>
         </el-form-item>
         
         <div class="form-footer">
@@ -33,12 +33,14 @@
 
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import type { FormInstance } from 'element-plus'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage, type FormInstance } from 'element-plus'
 import { login } from '../services/api'
 import userStore from '../stores/userStore'
 
 const router = useRouter()
+const route = useRoute()
+const submitting = ref(false)
 const loginFormRef = ref<FormInstance>()
 
 // 登录表单数据
@@ -60,23 +62,19 @@ const rules = {
 
 // 处理登录
 const handleLogin = async () => {
-  if (!loginFormRef.value) return
-  
-  await loginFormRef.value.validate(async (valid) => {
-    if (valid) {
-      // 调用登录API
-      const res = await login(loginForm.username, loginForm.password)
-      if (res.success) {
-        // 保存用户信息到状态管理
-        userStore.setCurrentUser(res.data)
-        // 登录成功后跳转到首页
-        router.push('/')
-      } else {
-        // 显示错误信息
-        alert(res.message)
-      }
-    }
-  })
+  if (!loginFormRef.value || submitting.value) return
+  if (!await loginFormRef.value.validate().catch(() => false)) return
+  submitting.value = true
+  try {
+    const res = await login(loginForm.username, loginForm.password)
+    if (!res.success) { ElMessage.error(res.message || '登录失败'); return }
+    userStore.setCurrentUser(res.data)
+    // 只接受站内路径；不允许协议相对 URL、反斜杠或跳回登录页。
+    const redirect = route.query.redirect
+    const target = typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//') && !/[\\\r\n]/.test(redirect) && !/^\/(?:login|register)(?:[/?#]|$)/.test(redirect) ? redirect : '/'
+    await router.replace(target)
+  } catch { ElMessage.error('无法连接服务端，请检查网络或稍后重试。') }
+  finally { submitting.value = false }
 }
 </script>
 
@@ -90,7 +88,7 @@ const handleLogin = async () => {
 }
 
 .login-card {
-  width: 400px;
+  width: min(400px, calc(100% - 24px));
 }
 
 .card-header {

@@ -5,11 +5,17 @@ export const PDF_LIMITS = { maxBytes: 10 * 1024 * 1024, maxPages: 40, maxCharact
 export interface ContractPage { page: number; text: string }
 export interface ParsedContract { pages: ContractPage[]; pageCount: number; characterCount: number }
 
-export function validatePdfFile(file: { buffer: Buffer; originalname: string; mimetype: string }): void {
-  if (file.buffer.length === 0 || file.buffer.length > PDF_LIMITS.maxBytes) throw new AppError(413, 'FILE_SIZE', 'PDF 不能为空且不能超过 10 MB。');
-  if (!file.originalname.toLowerCase().endsWith('.pdf') || !['application/pdf', 'application/octet-stream'].includes(file.mimetype) || !file.buffer.subarray(0, 1024).includes(Buffer.from('%PDF-'))) {
+export function validatePdfMetadata(file: { originalname: string; mimetype: string }): void {
+  if (!file.originalname.toLowerCase().endsWith('.pdf') || !['application/pdf', 'application/octet-stream'].includes(file.mimetype)) {
     throw new AppError(400, 'FILE_TYPE', '请选择真正的 PDF 文件；暂不支持 DOC、DOCX 或图片。');
   }
+}
+
+export function validatePdfFile(file: { buffer: Buffer; originalname: string; mimetype: string }): void {
+  validatePdfMetadata(file);
+  if (file.buffer.length === 0 || file.buffer.length > PDF_LIMITS.maxBytes) throw new AppError(413, 'FILE_SIZE', 'PDF 不能为空且不能超过 10 MB。');
+  // 本项目只接受标准 PDF 文件头，不接受在可执行/HTML 文件后拼接的伪装内容。
+  if (!/^%PDF-(?:1\.[0-7]|2\.0)(?:\r|\n|\s)/.test(file.buffer.subarray(0, 16).toString('latin1'))) throw new AppError(400, 'FILE_TYPE', '文件内容不是标准 PDF，请重新导出为文字型 PDF。');
 }
 
 export async function parseContractPdf(buffer: Buffer): Promise<ParsedContract> {

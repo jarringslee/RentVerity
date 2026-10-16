@@ -11,13 +11,20 @@ async function contractRequest<T>(path: string, options: RequestInit): Promise<T
   if (!token) throw new ContractApiError(401, 'AUTH_REQUIRED', '请先登录后分析合同。')
   const headers = new Headers(options.headers)
   headers.set('Authorization', `Bearer ${token}`)
+  const deadline = AbortSignal.timeout(path === '/parse' ? 80000 : 130000)
+  const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline
   let response: Response
-  try { response = await fetch(`${API_BASE_URL}/contracts${path}`, { ...options, headers }) }
+  let payload: any
+  try {
+    response = await fetch(`${API_BASE_URL}/contracts${path}`, { ...options, headers, signal })
+    if (response.status === 401) userStore.expireSession(token)
+    payload = await response.json().catch(error => { if (signal.aborted) throw error; return null })
+  }
   catch (error) {
     if (options.signal?.aborted) throw error
+    if (deadline.aborted) throw new ContractApiError(408, 'REQUEST_TIMEOUT', '请求等待超时，请检查网络后手动重试。')
     throw new ContractApiError(0, 'NETWORK_ERROR', '无法连接服务端，请检查服务是否启动。')
   }
-  const payload = await response.json().catch(() => null)
   if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
   if (!response.ok || !payload?.success) {
     throw new ContractApiError(response.status, payload?.code || 'REQUEST_FAILED', payload?.message || (response.status === 401 ? '登录已过期，请重新登录。' : '服务端返回异常，请稍后重试。'))

@@ -7,6 +7,8 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AiMarkdown: typeof import('./src/components/AiMarkdown.vue')['default']
+    AssistantHouseCards: typeof import('./src/components/AssistantHouseCards.vue')['default']
     ContractPdfPreview: typeof import('./src/components/ContractPdfPreview.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAvatar: typeof import('element-plus/es')['ElAvatar']

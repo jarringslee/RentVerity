@@ -7,7 +7,8 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localho
 
 // 公共请求封装
 const request = async (path: string, options: RequestInit = {}) => {
-  const token = userStore.getToken?.()
+  const isAuthRequest = path === '/auth/login' || path === '/auth/register'
+  const token = isAuthRequest ? null : userStore.getToken()
   const res = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
@@ -16,7 +17,9 @@ const request = async (path: string, options: RequestInit = {}) => {
       ...(options.headers || {})
     }
   })
-  return res.json()
+  if (res.status === 401 && !isAuthRequest) userStore.expireSession(token)
+  const payload = await res.json().catch(() => null)
+  return payload ?? { success: false, message: res.status === 401 ? '登录已过期，请重新登录。' : '服务端返回异常，请稍后重试。' }
 }
 
 
@@ -82,6 +85,7 @@ export const uploadUserAvatar = async (file: File, tokenOverride?: string | null
     headers,
     body: form
   })
+  if (res.status === 401) userStore.expireSession(token)
   return res.json()
 }
 
@@ -98,6 +102,8 @@ const transformHouseFromApi = (house: any) => {
   return {
     id: house.id,
     title: house.title,
+    city: house.city ?? null,
+    houseType: house.house_type ?? null,
     price: house.price,
     location: house.location,
     lng: house.lng != null ? Number(house.lng) : null,
@@ -160,6 +166,8 @@ export const searchHouses = (conditions: Partial<HouseQuery>, signal?: AbortSign
 
 // 发布房源
 export const publishHouse = async (payload: {
+  city: string
+  houseType: string
   title: string
   price: number
   location: string
@@ -179,6 +187,8 @@ export const publishHouse = async (payload: {
     body: JSON.stringify(payload)
   })
 }
+
+export const getHouseCities = () => request('/houses/cities')
 
 /** WebSocket 聊天地址（需在登录后调用） */
 export const getChatWsUrl = (): string => {
