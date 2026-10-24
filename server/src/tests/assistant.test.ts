@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
-import jwt from 'jsonwebtoken';
+import { createSession, SESSION_COOKIE } from '../auth/session';
 import { AppError } from '../utils/AppError';
 import { buildAssistantMessages, evidenceCity, parseAssistantRequest, runAssistant, searchAssistantHouses, type AssistantEvent } from '../assistant/service';
 import { createAssistantRouter } from '../routes/assistant';
@@ -105,7 +105,7 @@ test('HTTP SSE checks auth/input, automatically searches, emits mid-stream error
   const server = http.createServer(app); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())); });
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/assistant/message`;
-  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt.sign({ userId: 1 }, process.env.JWT_SECRET)}` };
+  const headers = { 'Content-Type': 'application/json', Cookie: `${SESSION_COOKIE}=${createSession(1).token}` };
   const post = (body: unknown) => fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
   assert.equal((await fetch(url, { method: 'POST' })).status, 401);
   assert.equal((await post({ message: '找房', sql: 'inject' })).status, 400);
@@ -123,7 +123,7 @@ test('concurrent requests are blocked, browser stop reaches upstream and release
   const server = http.createServer(app); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())); });
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/assistant/message`;
-  const options = { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt.sign({ userId: 1 }, process.env.JWT_SECRET)}` }, body: JSON.stringify({ message: '帮我找房' }) };
+  const options = { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: `${SESSION_COOKIE}=${createSession(1).token}` }, body: JSON.stringify({ message: '帮我找房' }) };
   const controller = new AbortController(), first = await fetch(url, { ...options, signal: controller.signal });
   const draining = first.text().catch(() => 'cancelled'); await began;
   assert.equal((await fetch(url, options)).status, 409);

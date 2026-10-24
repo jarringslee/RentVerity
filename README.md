@@ -32,9 +32,15 @@
 
 上传在进入 Multer 内存缓冲前先鉴权和准入：每用户 6 次/分钟、每 IP 30 次/分钟、单用户一个上传/解析、单进程最多 4 个；一分钟上传超时。前后端校验扩展名、MIME、非空/10 MB 和标准 PDF 文件头，服务端继续检查解析、页数与文本量。限制不是病毒扫描或完整进程沙箱，多实例部署还需要网关/共享限流；生产环境不要直接暴露开发服务器。
 
-## 登录与低成本体验优化
+## 登录与会话
 
-收藏、发布、资料、真人聊天使用路由登录守卫，登录成功返回原站内路径。浏览器启动/聚焦/定时检查 JWT 到期时间只用于体验，鉴权仍由服务端验签决定。普通 API、头像上传、合同和 SSE 首包的当前 token 返回 401 时统一清理登录态并提示；迟到旧请求的 401 不会退出新账号，另一标签退出也会同步。未实现 refresh token、服务端完整撤销体系或 HttpOnly Cookie 会话；当前 localStorage token 仍有 XSS 风险。
+登录凭证为单个 JWT，由服务端写入 `rentverity_session` HttpOnly Cookie：有效期 7 天、`SameSite=Lax`、`Path=/`、不设置 Domain。本项目只在本地 HTTP 运行，因此 `Secure=false`。登录和注册的 JSON 不再返回 token，前端不读取 JWT、不写入 localStorage/sessionStorage，也不在 WebSocket URL 传递凭证。升级会清理旧 `rentverity_current_user` 缓存，需重新登录；注册成功后直接登录，可选头像随后通过 Cookie 上传。
+
+用户资料、非凭证的 `sessionId` 和 `expiresAt` 只存在 Vue ref 内存中。刷新后先通过 `GET /users/me` 恢复身份，再决定私有路由是否放行；聚焦/定时检查只重新核对登录状态，不续签 JWT。普通 API、头像、合同和 SSE Fetch 均使用 `credentials: 'include'`。退出需服务端确认清除 Cookie，失败时保留当前状态。localStorage 只发送不含身份或凭证的随机变化通知，其他同源标签收到后清空私有页面并向后端重新核对；助手对话的 sessionStorage 仍按用户隔离保留。
+
+前端用会话版本隔离旧响应，用不具备认证能力的 `X-RentVerity-Session` 与 Cookie 中的会话 ID 比对，防止共享 Cookie 换账号后发送旧意图。同源标签在支持 Web Locks 时串行执行登录/注册/退出及身份更新，不支持时仅保证当前标签串行；认证期间旧聚焦检查和迟到 401 不更新身份。没有自动续期、refresh token 或 JWT 撤销名单；退出清除当前浏览器 Cookie 并关闭对应的现有聊天连接，不代表已签发 JWT 在服务端立即作废。
+
+轻量 CSRF 防护为 `SameSite=Lax` 配合写操作的精确 Origin 白名单校验，缺失 Origin 时才回退 Referer，两者都缺失则拒绝。校验在 JSON 解析和上传缓冲前执行，覆盖登录、注册、退出、发布、收藏、头像、合同和助手请求；WebSocket 握手单独要求可信 Origin。CORS 允许凭证且只允许明确来源，不使用 `*`。HttpOnly 限制脚本直接读取 Cookie，仍需现有的文本转义/Markdown 净化；不能据此宣称消除 XSS 或实现完整安全体系。协议、错误码与配置见 [服务端说明](server/README.md)。
 
 列表、收藏和 AI 卡片缩略图使用原生图片懒加载/异步解码；不把详情主图一律延迟，也不声称已实现虚拟列表、图片 CDN 或性能提升百分比。
 
@@ -75,7 +81,7 @@ npm run dev
 
 服务端配置优先级为显式进程环境 → `server/.env.local` → `server/.env`。在本地覆盖文件填写 `AI_API_KEY`，不与另一项目混用，修改后重启服务端；配置示例和接口见 [服务端说明](server/README.md)。`JWT_SECRET` 必须配置，不再使用固定默认密钥。
 
-前端 API 默认地址为 `http://localhost:3001`，可通过 `VITE_API_BASE_URL` 覆盖。新环境快照/初始化/演示 seed，以及已有库城市/房型增量升级步骤见 [数据库说明](server/database/README.md)。新快照包含当前城市/房型字段，不重复运行旧迁移；已有环境不要重建库。
+浏览器用 localhost 打开前端时，API 默认访问 `http://localhost:3001`；用 127.0.0.1 打开时默认访问 `http://127.0.0.1:3001`，可通过 `VITE_API_BASE_URL` 覆盖。Cookie 依赖主机，请保持前后端一致使用 localhost 或 127.0.0.1。服务端默认信任这两个主机的 5173（开发）和 4173（预览）端口；若 Vite 因占用改用其他端口，在 `server/.env.local` 设置完整的 `CORS_ORIGINS` 后重启服务端，不能只改前端地址。新环境快照/初始化/演示 seed，以及已有库城市/房型增量升级步骤见 [数据库说明](server/database/README.md)。本次鉴权迁移不改数据库结构。
 
 发布租金、坐标、图片地址和联系方式等由服务端校验，归属只取登录身份。房源不提供风险评分，旧 risk_level 仅为兼容历史表保留，不再作为默认“低风险”展示。聊天室是独立真人会话，支持基础消息持久化、未读/已读与手动重连，不声称具备自动重连、可靠重投或完整即时通信能力。
 
@@ -87,8 +93,9 @@ npm run dev
 
 - 源码根：`npm run build`。
 - 源码根：`npm run test:chat`（3 项聊天合并/上限/字段映射纯函数检查，不调用外部服务）。
+- 源码根：`npm run test:session`（真实登录状态/请求模块的 fetch、storage 注入检查，覆盖旧响应、跨标签通知、认证串行与核对竞态；不是浏览器或真实数据库验收）。
 - `server/`：`npm test`（构建、PDF/证据、筛选/助手/接口与本地模型协议测试，不调用真实 DeepSeek 或业务数据库）。
-- `server/`：`npm audit --omit=dev --registry=https://registry.npmjs.org`（生产依赖已知漏洞检查；镜像不一定提供 audit，不修改全局配置，也不等同于完整安全审计）。本轮生产报告 0 项，全量仍有 5 项开发工具链告警，暂未替换 ts-node-dev。
+- `server/`：`npm audit --omit=dev --registry=https://registry.npmjs.org`（生产依赖已知漏洞检查；镜像不一定提供 audit，不修改全局配置，也不等同于完整安全审计）。2026-10-16 的历史报告为生产 0 项、全量 5 项开发工具链告警，暂未替换 ts-node-dev；Cookie 迁移没有重新执行依赖审计。
 - `server/`：`npm run smoke:contract`（显式调用真实模型一次，仅发送合成合同，不使用私人文件）。
 - `server/`：`npm run smoke:assistant`（显式多次调用真实模型并只读查当前数据库，逐次报告工具/流式阶段；次数随匹配分支变化，固定场景不代表准确率）。
 - `server/`：`npm run smoke:business`（创建/清理独立临时 MySQL 测试库，测试完整基础业务；不写现有业务库或调用模型；权限不足时可显式提供空测试库，见数据库说明）。
@@ -96,10 +103,12 @@ npm run dev
 
 开发记录与真实模型验收状态统一保存在外层 `开发记录.md`，下一步见实施路线。PDF worker 与字体/CMap 资源随构建本地提供，不依赖浏览器向第三方 CDN 获取合同解析资源。
 
+本次 Cookie 迁移的浏览器回归使用真实本地 HTTP/WS/Cookie 和专用隔离 MySQL，模型使用显式本地 HTTP 协议桩，迟到响应/中断/地理编码等待使用显式故障桩；不把它们记为真实 DeepSeek 或真实地图验收。隔离库和本轮生成的头像均按测试归属清理，不写既有业务库。
+
 ## 重命名与数据兼容
 
 - 文件夹和 GitHub 仓库的重命名由用户操作，步骤保存在外层 `RentVerity-改名步骤.md`。
 - 现有数据库连接继续使用 `.env` 的 `DB_NAME`；品牌改名不直接搬迁或删除已有数据库。新建环境建议库名 `rentverity`。
 - SQL 迁移不再硬编码数据库名，执行前必须选中与 `DB_NAME` 一致的目标数据库；例如新库使用 `mysql --database=rentverity` 连接后执行迁移。
-- 登录缓存键已改为 `rentverity_current_user`，升级后需重新登录；账号、房源和聊天记录不受影响。
+- 旧 `rentverity_current_user` 登录缓存已停用并自动删除；JWT 改为 HttpOnly Cookie，账号、房源和聊天记录不受影响。
 - Git 历史、尚未手动更名的路径和既有数据库标识可保留历史名称，不能仅替换连接配置而不迁移数据。

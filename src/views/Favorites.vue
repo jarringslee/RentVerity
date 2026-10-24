@@ -73,11 +73,12 @@ const handleImageError = (e: Event) => {
 const removeFromFavorites = async (houseId: number) => {
   if (!userStore.currentUser.value) return
   
-  const res = await removeFavorite(houseId)
-  if (res.success) {
-    favorites.value = favorites.value.filter(house => house.id !== houseId)
-  } else {
-    alert('取消收藏失败')
+  try {
+    const res = await removeFavorite(houseId)
+    if (res.success) favorites.value = favorites.value.filter(house => house.id !== houseId)
+    else alert('取消收藏失败')
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) alert('取消收藏失败，请稍后重试。')
   }
 }
 
@@ -88,9 +89,11 @@ const fetchFavorites = async () => {
     return
   }
   
-  const res = await getUserFavorites()
-  if (res.success) {
-    favorites.value = res.data
+  try {
+    const res = await getUserFavorites()
+    if (res.success) favorites.value = res.data
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) alert('收藏加载失败，请稍后重试。')
   }
 }
 

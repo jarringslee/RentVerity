@@ -82,13 +82,13 @@ router.get('/me', requireAuth, async (req, res) => {
     const user = Array.isArray(rows) ? (rows[0] as any) : null;
 
     if (!user) {
-      return res.status(404).json({ success: false, message: '用户不存在' });
+      return res.status(401).json({ success: false, message: '用户不存在，请重新登录' });
     }
 
     return res.json({
       success: true,
       message: '获取成功',
-      data: publicUserFromRow(user)
+      data: { ...publicUserFromRow(user), sessionId: (req as any).session.jti, expiresAt: new Date((req as any).session.exp * 1000).toISOString() }
     });
   } catch (err) {
     logSafeError(err);

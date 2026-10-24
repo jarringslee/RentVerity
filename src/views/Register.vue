@@ -95,7 +95,7 @@
         </el-form-item>
 
         <el-form-item>
-          <el-button type="primary" style="width: 100%" @click="handleRegister">
+          <el-button type="primary" :loading="submitting" style="width: 100%" @click="handleRegister">
             注册
           </el-button>
         </el-form-item>
@@ -114,6 +114,7 @@ import { useRouter } from 'vue-router'
 import type { FormInstance, UploadFile } from 'element-plus'
 import { ElMessage } from 'element-plus'
 import { register, uploadUserAvatar } from '../services/api'
+import userStore from '../stores/userStore'
 import UserAvatar from '../components/UserAvatar.vue'
 import { PERSONAL_PREFERENCE_OPTIONS } from '../constants/userPreferences'
 import {
@@ -123,6 +124,7 @@ import {
 
 const router = useRouter()
 const registerFormRef = ref<FormInstance>()
+const submitting = ref(false)
 /** 省市区级联 value，与 element-china-area-data 一致 */
 const regionCodes = ref<string[]>([])
 
@@ -189,10 +191,11 @@ const rules = {
 }
 
 const handleRegister = async () => {
-  if (!registerFormRef.value) return
-
-  await registerFormRef.value.validate(async (valid) => {
-    if (!valid) return
+  if (!registerFormRef.value || submitting.value) return
+  submitting.value = true
+  try {
+    if (!await registerFormRef.value.validate().catch(() => false)) return
+    const selectedAvatar = avatarFile.value
     const res = await register({
       username: registerForm.username,
       phone: registerForm.phone,
@@ -202,24 +205,26 @@ const handleRegister = async () => {
       city: cityLabelFromCodes(regionCodes.value) || null
     })
     if (res.success) {
-      const data = res.data as { token?: string } | undefined
-      if (avatarFile.value && data?.token) {
-        const up = (await uploadUserAvatar(avatarFile.value, data.token)) as {
-          success?: boolean
-          message?: string
-        }
-        if (!up.success) {
-          ElMessage.warning(
-            up.message || '头像上传失败，可登录后在个人资料中重新上传'
-          )
+      // 返回后另一标签可能已换账号，不能给新身份上传这次注册选择的头像。
+      if (userStore.getSessionId() !== res.data.sessionId) return
+      const version = userStore.getSessionVersion()
+      ElMessage.success('注册成功，已登录')
+      await router.replace('/')
+      if (selectedAvatar && userStore.isCurrentSession(version)) {
+        try {
+          const up = await uploadUserAvatar(selectedAvatar)
+          if (up.success && up.data && userStore.isCurrentSession(version)) userStore.mergeCurrentUser(up.data)
+          else if (userStore.isCurrentSession(version)) ElMessage.warning(up.message || '头像上传失败，可在个人资料中重新上传')
+        } catch {
+          if (userStore.isCurrentSession(version)) ElMessage.warning('账号已创建，头像上传失败，可在个人资料中重新上传')
         }
       }
-      ElMessage.success('注册成功，请登录')
-      router.push('/login')
     } else {
       ElMessage.error((res as { message?: string }).message || '注册失败')
     }
-  })
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) ElMessage.error('注册请求失败，请检查网络后重试。')
+  } finally { submitting.value = false }
 }
 </script>
 

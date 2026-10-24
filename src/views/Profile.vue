@@ -480,7 +480,6 @@ const cancelPasswordSection = () => {
 }
 
 const mergeProfileToStore = (data: Record<string, unknown>) => {
-  const token = userStore.getToken()
   userStore.mergeCurrentUser({
     id: data.id,
     username: data.username,
@@ -488,8 +487,7 @@ const mergeProfileToStore = (data: Record<string, unknown>) => {
     gender: data.gender === 'female' ? 'female' : 'male',
     city: data.city ?? null,
     avatarUrl: (data.avatarUrl as string | null | undefined) ?? null,
-    preferences: Array.isArray(data.preferences) ? data.preferences : [],
-    ...(token ? { token } : {})
+    preferences: Array.isArray(data.preferences) ? data.preferences : []
   })
 }
 
@@ -523,6 +521,8 @@ const resetAvatarToDefault = async () => {
     } else {
       ElMessage.error(res.message || '操作失败')
     }
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) ElMessage.error('头像重置失败，请稍后重试。')
   } finally {
     avatarResetting.value = false
   }
@@ -543,6 +543,8 @@ const loadProfile = async () => {
     } else {
       ElMessage.error(res.message || '加载用户信息失败')
     }
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) ElMessage.error('加载用户信息失败，请稍后重试。')
   } finally {
     pageLoading.value = false
   }
@@ -571,6 +573,8 @@ const submitBasic = async () => {
       } else {
         ElMessage.error(res.message || '保存失败')
       }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) ElMessage.error('保存失败，请稍后重试。')
     } finally {
       basicSaving.value = false
     }
@@ -605,6 +609,8 @@ const submitPassword = async () => {
       } else {
         ElMessage.error(res.message || '修改失败')
       }
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) ElMessage.error('密码修改失败，请稍后重试。')
     } finally {
       pwdSaving.value = false
     }

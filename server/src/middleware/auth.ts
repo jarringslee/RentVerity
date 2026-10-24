@@ -1,23 +1,16 @@
 import type { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { getJwtSecret } from '../config/jwt';
-
-type JwtPayload = {
-  userId: number;
-};
+import { verifySession, SESSION_HEADER } from '../auth/session';
 
 export const requireAuth = (req: Request, res: Response, next: NextFunction) => {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
-    return res.status(401).json({ success: false, message: '未登录' });
-  }
-
-  const token = header.slice('Bearer '.length).trim();
-
+  res.setHeader('Cache-Control', 'no-store');
   try {
-    const payload = jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] }) as JwtPayload;
-    if (!Number.isSafeInteger(payload.userId) || payload.userId <= 0) throw new Error('invalid user');
+    const payload = verifySession(req.headers);
+    const expected = req.get(SESSION_HEADER);
+    if (expected && expected !== payload.jti) {
+      return res.status(409).json({ success: false, code: 'SESSION_CHANGED', message: '登录账号已变化，请重新操作。' });
+    }
     (req as any).userId = payload.userId;
+    (req as any).session = payload;
     return next();
   } catch {
     return res.status(401).json({ success: false, message: '登录已过期，请重新登录' });

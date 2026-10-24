@@ -93,7 +93,7 @@ const selecting = ref(false)
 const dragging = ref(false)
 let dragDepth = 0
 let selectionVersion = 0
-let documentOwner: string | null = null
+let documentOwner: number | null = null
 const busy = computed(() => stage.value === 'parsing' || stage.value === 'analyzing')
 const stageText = computed(() => ({ idle: file.value ? '准备就绪，确认授权后开始' : '待选择文件', parsing: '正在上传并解析 PDF…', analyzing: '正在分析并核对原文…', done: '分析完成，请逐条核实提示', error: '处理未完成，可检查提示后重试', stopped: '本次已停止，可重新分析' })[stage.value])
 const steps = computed(() => [
@@ -108,7 +108,7 @@ let controller: AbortController | null = null
 let runVersion = 0
 
 function releaseSession() {
-  if (parsed.value && documentOwner === userStore.getToken()) void discardContract(parsed.value.documentId).catch(() => {})
+  if (parsed.value && documentOwner === userStore.getSessionVersion() && userStore.isLoggedIn()) void discardContract(parsed.value.documentId).catch(() => {})
   parsed.value = null
   documentOwner = null
 }
@@ -184,16 +184,16 @@ async function startAnalysis() {
   activeFinding.value = null
   errorMessage.value = ''
   selectionError.value = ''
-  const token = userStore.getToken()
-  if (!token || version !== runVersion || !file.value) return
+  const ownerVersion = userStore.getSessionVersion()
+  if (!userStore.isLoggedIn() || version !== runVersion || !file.value) return
   try {
     if (!parsed.value || new Date(parsed.value.expiresAt).getTime() <= Date.now()) {
       releaseSession()
       stage.value = 'parsing'
       const document = await parseContract(file.value, signal)
-      if (version !== runVersion) { void discardContract(document.documentId).catch(() => {}); return }
+      if (version !== runVersion) { if (userStore.isCurrentSession(ownerVersion)) void discardContract(document.documentId).catch(() => {}); return }
       parsed.value = document
-      documentOwner = token
+      documentOwner = ownerVersion
     }
     stage.value = 'analyzing'
     const analysis = await analyzeContract(parsed.value.documentId, signal)
@@ -214,7 +214,7 @@ function locateFinding(finding: ContractFinding) {
   previewPanel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-watch(() => userStore.currentUser.value?.token, () => clearFile(), { flush: 'sync' })
+watch(() => userStore.sessionVersion.value, () => clearFile(), { flush: 'sync' })
 onBeforeUnmount(clearFile)
 </script>
 

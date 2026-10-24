@@ -19,6 +19,27 @@ AI_TIMEOUT_MS=60000
 
 `JWT_SECRET` 必填，生产入口在启动时检查；已有账号、房源、收藏和消息保留原数据库。新环境使用 [完整 schema/演示 seed 与隔离验收](database/README.md)，该快照已合并 002—006，现有环境不重复执行。
 
+## Cookie 鉴权与本地来源校验
+
+本项目用于本地面试练习。服务端签发 HS256 JWT，放入 `rentverity_session` Cookie：HttpOnly、SameSite=Lax、Path=/、有效期 7 天、不设置 Domain；本地 HTTP 使用 Secure=false。JSON 只返回公开用户资料及 `sessionId`/`expiresAt` 元信息，不返回 JWT。HTTP 不再接受登录 Bearer，WebSocket 不再接受 `?token=...`。
+
+| 请求 | 行为 |
+| --- | --- |
+| `POST /auth/register` | 创建账号并设置 Cookie，前端直接进入登录状态，再上传可选头像 |
+| `POST /auth/login` | 校验密码后设置 Cookie；密码错误的 401 不清除已有 Cookie |
+| `GET /users/me` | 通过 Cookie 恢复用户与会话元信息，响应不缓存；未登录/过期/用户不存在为 401 |
+| `POST /auth/logout` | 清除同名同路径 Cookie，关闭当前会话已建立的聊天连接；有效 Cookie 须携带匹配的 `X-RentVerity-Session`，不匹配返回 409 且不清 Cookie |
+
+浏览器所有 API Fetch（含 JSON、头像/合同 FormData、SSE）使用 `credentials: 'include'`。前端把非凭证 `sessionId` 放入 `X-RentVerity-Session`，后端有 Cookie 且该头存在时核对 JWT 的 jti，不一致返回 `409 SESSION_CHANGED`，拒绝共享 Cookie 切账号后的旧意图；这个头单独不能登录。前端据此重新核对身份并取消旧操作，不自动重放发布、上传或 SSE 请求。普通接口的 401 不发送清 Cookie 响应，避免迟到响应清掉新登录；身份恢复和认证结果响应均不缓存。
+
+`CORS_ORIGINS` 是逗号分隔的完整前端来源（协议、主机、端口），未配置时默认允许 `http://localhost:5173`、`http://127.0.0.1:5173` 及这两个主机的 4173 端口。例如开发端口改为 5174，在被忽略的 `.env.local` 设置 `CORS_ORIGINS=http://localhost:5174`，重启服务端。前端与 API 应一致使用 localhost 或 127.0.0.1；`VITE_API_BASE_URL` 变更不能代替来源配置。Cookie 不按端口隔离，使用项目专属 Cookie 名避免与其他本地项目同名。
+
+CORS 仅对明确允许的 Origin 返回凭证许可。POST/PATCH/PUT/DELETE 等写操作在 JSON/Multer 之前校验来源：Origin 存在时必须精确匹配；缺失时才解析 Referer 的 origin；两者都缺失或不可信返回 `403 CSRF_ORIGIN_INVALID`。伪造后缀、错误端口和 `Origin: null` 均拒绝，合法 Referer 不能覆盖非法 Origin。包括登录/注册/退出和 AI 请求；脚本测试也必须显式提供可信来源。GET/HEAD/OPTIONS 不得承担业务写入。这里采用轻量来源校验，没有额外 CSRF token 协议。
+
+WebSocket 在升级前独立校验 Origin（不回退 Referer）和 Cookie，并要求子协议 `rentverity-chat` 与 `session.<sessionId>`；后者只隔离身份错配，认证依据仍是 Cookie 签名。服务端选中 `rentverity-chat`，按 JWT 到期关闭连接，退出时按会话 ID 关闭对应连接；消息仍检查会话成员。浏览器握手失败后手动重连前重新核对身份，不能用 HTTP CORS 代替 WS 来源校验。
+
+边界：没有 refresh token、自动续期、会话数据库表或 JWT 撤销名单。退出不使已签发 JWT 永久作废，密码修改也不立即撤销其他会话；已开始的业务数据库操作不能由前端取消保证回滚。HttpOnly 不阻止 XSS 借用户浏览器发起请求，仍需文本转义和 Markdown 净化。
+
 ## 基础业务边界
 
 注册在服务端校验用户名、手机号与密码，bcrypt 输入最多 72 UTF-8 字节，存储哈希而非明文。HTTP 与 WebSocket JWT 均限制 HS256 和正整数用户 ID；密码更新不撤销已签发 JWT，属于当前简化边界，不宣传完整会话撤销体系。
@@ -29,7 +50,7 @@ AI_TIMEOUT_MS=60000
 
 ## 合同接口
 
-所有接口要求 `Authorization: Bearer <登录 token>`。路由没有 `/api` 前缀，与现有 `/houses` 等保持一致。
+所有合同接口要求登录 Cookie；写请求还要通过上述来源校验。路由没有 `/api` 前缀，与现有 `/houses` 等保持一致。
 
 | 请求 | 输入 | 结果 |
 | --- | --- | --- |
@@ -85,7 +106,7 @@ WS帧有序不代表async数据库回调有序；每个连接以最多32个待�
 
 ## 验证
 
-`npm test` 使用 Node 内置测试器、合成 PDF、本地 HTTP 模型协议桩及注入的查询测试替身，覆盖合同、模型、筛选和助手；不访问业务数据库或真实 DeepSeek。
+`npm test` 使用 Node 内置测试器、合成 PDF、本地 HTTP 模型协议桩及注入的查询测试替身，覆盖合同、模型、筛选、助手、Cookie 鉴权、来源拒绝和 WS 握手/到期/退出；不访问业务数据库或真实 DeepSeek。源码根的 `npm run test:session` 检查前端状态/请求模块的旧响应、认证串行和跨标签通知，使用 fetch/storage 替身；隔离库烟测和真实浏览器回归另行验证，不能用类型检查代替。
 
 `npm run smoke:contract` 是显式真实调用：发送两页合成合同，打印结构/引用核对摘要，不输出 Key、完整上游响应或私人文件。执行前配置本项目 Key；未配置时返回 `AI_NOT_CONFIGURED`。测试结果和真实调用状态写外层开发记录。
 

@@ -1,119 +1,147 @@
 import { ref } from 'vue'
+import { API_BASE_URL, SESSION_HEADER } from '../services/config'
+import { withAuthMutation, getAuthRevision, isAuthMutating } from '../services/authMutation'
 
-const STORAGE_KEY = 'rentverity_current_user'
-
-const readPersistedUser = () => {
-  try {
-    if (typeof window === 'undefined') return null
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    return JSON.parse(raw)
-  } catch {
-    return null
-  }
+type CurrentUser = {
+  id: number; username: string; phone: string; gender: 'male' | 'female';
+  city: string | null; avatarUrl: string | null; preferences: string[];
+  sessionId: string; expiresAt: string; createdAt?: string
 }
 
-// 用户状态（启动时从 localStorage 恢复）
-const currentUser = ref<any>(readPersistedUser())
+const LEGACY_KEY = 'rentverity_current_user'
+const EVENT_KEY = 'rentverity_auth_event'
+const currentUser = ref<CurrentUser | null>(null)
+const initialized = ref(false)
 const sessionExpired = ref(false)
+const sessionError = ref('')
+// 仅是本标签的请求版本，不是 token，也不能用于服务端认证。
+const sessionVersion = ref(0)
+let pending: { version: number; authRevision: number; promise: Promise<boolean> } | null = null
+let loggingOut: Promise<void> | null = null
 
-const persistUser = (user: any) => {
-  try {
-    if (typeof window === 'undefined') return
-    if (!user) {
-      window.localStorage.removeItem(STORAGE_KEY)
-      return
-    }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(user))
-  } catch {
-    // ignore persist errors (storage disabled / quota)
+function cleanUser(data: any): CurrentUser {
+  if (!data || !Number.isSafeInteger(data.id) || data.id <= 0 || typeof data.sessionId !== 'string' ||
+    !/^[0-9a-f-]{36}$/.test(data.sessionId) || typeof data.expiresAt !== 'string' ||
+    !Number.isFinite(Date.parse(data.expiresAt)) || Date.parse(data.expiresAt) <= Date.now()) throw new Error('登录状态无效，请重新登录。')
+  // 白名单复制，响应或旧缓存中的 token 不进入状态。
+  return {
+    id: data.id, username: String(data.username ?? ''), phone: String(data.phone ?? ''),
+    gender: data.gender === 'female' ? 'female' : 'male', city: data.city ?? null,
+    avatarUrl: data.avatarUrl ?? null, preferences: Array.isArray(data.preferences) ? data.preferences.filter((v: unknown) => typeof v === 'string') : [],
+    sessionId: data.sessionId, expiresAt: data.expiresAt, ...(data.createdAt ? { createdAt: data.createdAt } : {})
   }
 }
 
-// 设置当前用户
-const setCurrentUser = (user: any) => {
+function announceChange() {
+  try { localStorage.setItem(EVENT_KEY, JSON.stringify({ nonce: crypto.randomUUID() })) } catch { /* 聚焦时仍可向后端重新核对。 */ }
+}
+
+function setCurrentUser(data: unknown, notify = true) {
+  const user = cleanUser(data)
+  if (currentUser.value?.sessionId !== user.sessionId || currentUser.value?.id !== user.id) sessionVersion.value++
   currentUser.value = user
-  persistUser(user)
+  initialized.value = true
   sessionExpired.value = false
-  refreshSession()
+  sessionError.value = ''
+  if (notify) announceChange()
 }
 
-// 合并更新当前用户信息（保留 token 等未返回字段）
-const mergeCurrentUser = (partial: Record<string, any>) => {
-  if (!currentUser.value) return
-  const next = {
-    ...currentUser.value,
-    ...partial
-  }
-  // 已改用多选 preferences，去掉旧字段 preference 避免与展示不一致
-  if ('preferences' in partial) {
-    delete next.preference
-  }
-  setCurrentUser(next)
+function mergeCurrentUser(partial: Record<string, unknown>) {
+  if (currentUser.value) setCurrentUser({ ...currentUser.value, ...partial }, false)
 }
 
-// 清除当前用户
-const clearCurrentUser = () => {
+function clearLocal(expired = false, notify = false) {
+  sessionVersion.value++
   currentUser.value = null
-  persistUser(null)
-  sessionExpired.value = false
+  initialized.value = true
+  sessionExpired.value = expired
+  sessionError.value = ''
+  if (notify) announceChange()
 }
 
-// 仅用于前端体验，不验签、不取代后端 JWT 校验。旧请求的 401 不得退出新账号。
-const expireSession = (requestToken: string | null) => {
-  if (!requestToken || currentUser.value?.token !== requestToken) return
-  clearCurrentUser()
-  sessionExpired.value = true
+function isCurrentSession(version: number) { return sessionVersion.value === version }
+
+function expireSession(requestVersion: number) {
+  if (!isCurrentSession(requestVersion)) return
+  const hadUser = !!currentUser.value
+  // 游客反复聚焦/核对仍是游客，不重建登录表单、丢失正在输入的内容。
+  if (!hadUser) { initialized.value = true; sessionError.value = ''; return }
+  clearLocal(hadUser, hadUser)
 }
 
-function refreshSession() {
-  const user = currentUser.value
-  if (!user) return
-  const token = user.token
-  try {
-    if (typeof token !== 'string' || !token) throw new Error('missing token')
-    const parts = token.split('.')
-    if (parts.length !== 3) throw new Error('invalid token')
-    const body = JSON.parse(atob(parts[1]!.replace(/-/g, '+').replace(/_/g, '/')))
-    if (body.exp != null && (typeof body.exp !== 'number' || !Number.isFinite(body.exp) || body.exp * 1000 <= Date.now())) throw new Error('expired token')
-  } catch {
-    clearCurrentUser()
-    sessionExpired.value = true
-  }
+function checkExpiry() {
+  if (currentUser.value && Date.parse(currentUser.value.expiresAt) <= Date.now()) expireSession(sessionVersion.value)
 }
 
-// 检查用户是否已登录
-const isLoggedIn = () => {
-  return !!currentUser.value?.token
+function isLoggedIn() { checkExpiry(); return !!currentUser.value }
+function getSessionId() { checkExpiry(); return currentUser.value?.sessionId ?? null }
+function getSessionVersion() { checkExpiry(); return sessionVersion.value }
+
+function refreshSession(): Promise<boolean> {
+  // 这是重新核对身份，不续签 JWT。认证写入期间不让聚焦/定时检查抢先更新状态。
+  if (isAuthMutating()) return Promise.resolve(false)
+  const version = sessionVersion.value
+  const authRevision = getAuthRevision()
+  const isCurrent = () => isCurrentSession(version) && authRevision === getAuthRevision()
+  if (pending?.version === version && pending.authRevision === authRevision) return pending.promise
+  const promise = (async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/users/me`, { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(10000) })
+      if (!isCurrent()) return false
+      if (response.status === 401) { expireSession(version); return false }
+      const result = await response.json()
+      if (!isCurrent()) return false
+      if (!response.ok || !result.success) throw new Error('恢复登录状态失败，请检查服务端后重试。')
+      setCurrentUser(result.data, false)
+      return true
+    } catch (error) {
+      // 网络故障不能当成退出成功，也不能覆盖新一轮登录。
+      if (isCurrent()) sessionError.value = '无法恢复登录状态，请检查网络或服务端后重试。'
+      return false
+    } finally {
+      if (isCurrent()) initialized.value = true
+      if (pending?.version === version && pending.authRevision === authRevision) pending = null
+    }
+  })()
+  pending = { version, authRevision, promise }
+  return promise
 }
 
-// 获取 token（后续请求收藏/聊天/上传会用到）
-const getToken = () => {
-  refreshSession()
-  return currentUser.value?.token || null
+async function initializeSession() {
+  if (!initialized.value) await refreshSession()
 }
 
-refreshSession()
-// 同一浏览器的另一标签退出/切换账号时，当前页也要清除私有业务状态。
+function logout(): Promise<void> {
+  if (loggingOut) return loggingOut
+  const version = getSessionVersion(), sessionId = getSessionId()
+  loggingOut = withAuthMutation(async () => {
+    if (!isCurrentSession(version)) return
+    const response = await fetch(`${API_BASE_URL}/auth/logout`, {
+      method: 'POST', credentials: 'include', headers: sessionId ? { [SESSION_HEADER]: sessionId } : {}, signal: AbortSignal.timeout(10000)
+    })
+    if (!isCurrentSession(version)) return
+    if (response.status === 409) { initialized.value = false; throw new Error('登录账号已变化，请重新操作。') }
+    if (!response.ok) throw new Error('退出失败，请稍后重试。')
+    clearLocal(false, true)
+  }).finally(async () => { loggingOut = null; await initializeSession() })
+  return loggingOut
+}
+
 if (typeof window !== 'undefined') {
+  // 清掉旧版本整份用户缓存；不读取、迁移或广播其中的凭证。
+  try { localStorage.removeItem(LEGACY_KEY) } catch { /* storage may be disabled */ }
   const syncSession = (event: StorageEvent) => {
-    if (event.key !== STORAGE_KEY && event.key !== null) return
-    currentUser.value = readPersistedUser()
-    sessionExpired.value = false
-    refreshSession()
+    if (event.key !== EVENT_KEY && event.key !== null) return
+    clearLocal()
+    initialized.value = false
+    void refreshSession()
   }
   window.addEventListener('storage', syncSession)
   import.meta.hot?.dispose(() => window.removeEventListener('storage', syncSession))
 }
 
 export default {
-  currentUser,
-  setCurrentUser,
-  mergeCurrentUser,
-  clearCurrentUser,
-  expireSession,
-  refreshSession,
-  sessionExpired,
-  isLoggedIn,
-  getToken
+  currentUser, initialized, sessionExpired, sessionError, sessionVersion,
+  setCurrentUser, mergeCurrentUser, expireSession, refreshSession, initializeSession,
+  isLoggedIn, getSessionId, getSessionVersion, isCurrentSession, logout
 }

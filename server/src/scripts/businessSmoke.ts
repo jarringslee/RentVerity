@@ -6,7 +6,7 @@ import mysql from 'mysql2/promise';
 import { WebSocket } from 'ws';
 import { initializeEmptyDatabase, seedDemoDatabase } from '../database/bootstrap';
 
-type Actor = { id: number; token: string; username: string };
+type Actor = { id: number; cookie: string; sessionId: string; username: string };
 type Sandbox = { base: string; database: string; password: string; query: (sql: string, values?: unknown[]) => Promise<unknown> };
 
 /** 只创建/清理本脚本新建的随机演示测试库，不复用 DB_NAME，不触碰现有账号。 */
@@ -55,12 +55,12 @@ export async function withBusinessSandbox(run: (sandbox: Sandbox) => Promise<voi
 
 async function businessChecks({ base, password, query }: Sandbox) {
   const request = async (path: string, method = 'GET', body?: unknown, actor?: Actor) => {
-    const response = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', ...(actor ? { Authorization: `Bearer ${actor.token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    return { status: response.status, body: await response.json() as any };
+    const response = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:5173', ...(actor ? { Cookie: actor.cookie, 'X-RentVerity-Session': actor.sessionId } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    return { status: response.status, body: await response.json() as any, cookie: response.headers.getSetCookie()[0]?.split(';')[0] || '' };
   };
   const register = async (username: string, phone: string): Promise<Actor> => {
     const result = await request('/auth/register', 'POST', { username, phone, password });
-    assert.equal(result.status, 200); assert.ok(!('password_hash' in result.body.data)); return result.body.data;
+    assert.equal(result.status, 200); assert.ok(!('password_hash' in result.body.data)); assert.ok(!('token' in result.body.data)); assert.ok(result.cookie); return { ...result.body.data, cookie: result.cookie };
   };
   const owner = await register('smoke_owner', '19900000011'), tenant = await register('smoke_tenant', '19900000012'), outsider = await register('smoke_outside', '19900000013');
   assert.equal((await request('/auth/register', 'POST', { username: 'bad', phone: 'x', password })).status, 400);
@@ -99,7 +99,7 @@ async function businessChecks({ base, password, query }: Sandbox) {
   assert.equal((await request(`/chat/conversations/${conversationId}/read`, 'POST', undefined, outsider)).status, 404);
   assert.equal((await request(`/chat/conversations/${conversationId}/messages?limit=-1`, 'GET', undefined, tenant)).status, 400);
   assert.equal((await request(`/chat/conversations/${conversationId}/messages?beforeId=1.5`, 'GET', undefined, tenant)).status, 400);
-  const connect = (actor: Actor) => new Promise<WebSocket>((resolve, reject) => { const socket = new WebSocket(base.replace('http', 'ws') + `/ws/chat?token=${encodeURIComponent(actor.token)}`); socket.once('open', () => resolve(socket)); socket.once('error', reject); });
+  const connect = (actor: Actor) => new Promise<WebSocket>((resolve, reject) => { const socket = new WebSocket(base.replace('http', 'ws') + '/ws/chat', ['rentverity-chat', `session.${actor.sessionId}`], { headers: { Cookie: actor.cookie, Origin: 'http://localhost:5173' } }); socket.once('open', () => resolve(socket)); socket.once('error', reject); });
   const receive = (socket: WebSocket) => new Promise<any>((resolve, reject) => { const timer = setTimeout(() => { socket.off('message', message); reject(new Error('WebSocket frame timeout')); }, 5000); const message = (data: unknown) => { clearTimeout(timer); resolve(JSON.parse(String(data))); }; socket.once('message', message); });
   const [ownerSocket, tenantSocket, outsiderSocket] = await Promise.all([connect(owner), connect(tenant), connect(outsider)]);
   try {

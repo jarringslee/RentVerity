@@ -206,12 +206,12 @@ const handleSubmit = async () => {
   if (!formRef.value || submitting.value) return
   // 校验也可能异步，先占位，不能等 validate 回调后再防重复。
   submitting.value = true
-  const ownerToken = userStore.getToken()
+  const ownerVersion = userStore.getSessionVersion()
   try {
     if (!await formRef.value.validate().catch(() => false)) return
     const payload = { ...form, tags: [...form.tags] }
     const coords = await geocodeLocation(payload.location, payload.city)
-    if (disposed || !ownerToken || userStore.getToken() !== ownerToken) return
+    if (disposed || !userStore.isLoggedIn() || !userStore.isCurrentSession(ownerVersion)) return
     if (!coords) {
       ElMessage.warning('未能解析地址坐标，房源仍可发布，但地图页可能不显示该点')
     }
@@ -220,7 +220,7 @@ const handleSubmit = async () => {
       lng: coords?.lng ?? null,
       lat: coords?.lat ?? null
     })
-    if (disposed || userStore.getToken() !== ownerToken) return
+    if (disposed || !userStore.isCurrentSession(ownerVersion)) return
     if (res.success) {
       router.push('/houses')
     } else {

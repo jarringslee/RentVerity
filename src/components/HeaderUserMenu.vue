@@ -20,6 +20,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowDown } from '@element-plus/icons-vue'
 import userStore from '../stores/userStore'
+import { ElMessage } from 'element-plus'
 import UserAvatar from './UserAvatar.vue'
 
 const { size: avatarSize } = withDefaults(
@@ -33,7 +34,7 @@ const { size: avatarSize } = withDefaults(
 const router = useRouter()
 const user = computed(() => userStore.currentUser.value)
 
-function handleCommand(command: string) {
+async function handleCommand(command: string) {
   switch (command) {
     case 'profile':
       router.push('/profile')
@@ -42,8 +43,8 @@ function handleCommand(command: string) {
       router.push('/favorites')
       break
     case 'logout':
-      userStore.clearCurrentUser()
-      router.push('/')
+      try { await userStore.logout(); await router.push('/') }
+      catch (error) { ElMessage.error(error instanceof Error ? error.message : '退出失败，请稍后重试。') }
       break
   }
 }

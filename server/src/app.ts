@@ -15,6 +15,7 @@ import assistantRouter from './routes/assistant';
 import { attachChatWss } from './ws/chatGateway';
 import { getJwtSecret } from './config/jwt';
 import { logSafeError } from './utils/logSafeError';
+import { isAllowedOrigin, requireTrustedSource } from './middleware/csrf';
 
 export function createApp() {
 const app = express();
@@ -22,7 +23,9 @@ const app = express();
 fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
 fs.mkdirSync(`${UPLOADS_ROOT}/avatars`, { recursive: true });
 
-app.use(cors());
+app.use(cors({ origin: (origin, callback) => callback(null, !!origin && isAllowedOrigin(origin)), credentials: true }));
+// 在 JSON 解析和 multipart 上传之前拒绝不可信来源，包括登录、注册和退出。
+app.use(requireTrustedSource);
 app.use(express.json());
 app.use('/uploads', express.static(UPLOADS_ROOT));
 

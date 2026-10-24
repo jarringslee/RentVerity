@@ -1,8 +1,9 @@
 import { logSafeError } from '../utils/logSafeError';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '../config/jwt';
+import { createSession, setSessionCookie, clearSessionCookie, readSessionCookie, verifySession, SESSION_HEADER } from '../auth/session';
+import { closeSessionSockets } from '../ws/chatGateway';
 import { pool } from '../config/db';
 import { AppError } from '../utils/AppError';
 import { parseInput, registerSchema, loginSchema, isDuplicateKey } from '../utils/validation';
@@ -16,10 +17,7 @@ import {
 } from '../utils/userProfile';
 
 const router = Router();
-
-interface JwtPayload {
-  userId: number;
-}
+router.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 
 function publicUserFromRow(row: any) {
   return {
@@ -91,11 +89,7 @@ router.post('/register', async (req, res) => {
     const insertResult = result as { insertId: number };
     const userId = insertResult.insertId;
 
-    const token = jwt.sign(
-      { userId } as JwtPayload,
-      secret,
-      { expiresIn: '7d' }
-    );
+    const session = setSessionCookie(res, createSession(userId, secret));
 
     return res.json({
       success: true,
@@ -108,7 +102,7 @@ router.post('/register', async (req, res) => {
         city: cityVal,
         preferences: filteredPrefs,
         avatarUrl: null,
-        token
+        ...session
       }
     });
   } catch (err) {
@@ -148,18 +142,14 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, message: '用户名或密码错误' });
     }
 
-    const token = jwt.sign(
-      { userId: userRow.id } as JwtPayload,
-      getJwtSecret(),
-      { expiresIn: '7d' }
-    );
+    const session = setSessionCookie(res, createSession(userRow.id));
 
     return res.json({
       success: true,
       message: '登录成功',
       data: {
         ...publicUserFromRow(userRow),
-        token
+        ...session
       }
     });
   } catch (err) {
@@ -170,6 +160,21 @@ router.post('/login', async (req, res) => {
       message: '登录失败，服务器错误（若提示未知列，请先执行 migrations/002_user_profile_extend.sql）'
     });
   }
+});
+
+// 清除浏览器 Cookie，不等同于撤销所有已签发 JWT。
+router.post('/logout', (req, res) => {
+  if (readSessionCookie(req.headers)) {
+    try {
+      const session = verifySession(req.headers, true);
+      if (req.get(SESSION_HEADER) !== session.jti) {
+        return res.status(409).json({ success: false, code: 'SESSION_CHANGED', message: '登录账号已变化，请重新操作。' });
+      }
+      closeSessionSockets(session.jti);
+    } catch { /* 损坏/已失效 Cookie 也允许清除，但不输出其内容。 */ }
+  }
+  clearSessionCookie(res);
+  return res.json({ success: true, message: '已退出登录' });
 });
 
 export default router;

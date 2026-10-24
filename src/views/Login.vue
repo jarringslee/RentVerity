@@ -68,7 +68,7 @@ const handleLogin = async () => {
   try {
     const res = await login(loginForm.username, loginForm.password)
     if (!res.success) { ElMessage.error(res.message || '登录失败'); return }
-    userStore.setCurrentUser(res.data)
+    if (userStore.getSessionId() !== res.data.sessionId) return
     // 只接受站内路径；不允许协议相对 URL、反斜杠或跳回登录页。
     const redirect = route.query.redirect
     const target = typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//') && !/[\\\r\n]/.test(redirect) && !/^\/(?:login|register)(?:[/?#]|$)/.test(redirect) ? redirect : '/'

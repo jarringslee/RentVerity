@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
-import jwt from 'jsonwebtoken';
+import { createSession, SESSION_COOKIE } from '../auth/session';
 import { AppError } from '../utils/AppError';
 import { parseContractPdf, validatePdfFile, PDF_LIMITS } from '../contracts/pdf';
 import { buildContractMessages, verifyContractAnalysis, type ContractAnalysis } from '../contracts/analysis';
@@ -65,7 +65,7 @@ test('HTTP admission precedes Multer buffering and holds the parse slot after di
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { finishParse(); server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())); });
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/contracts/parse`;
-  const auth = { Authorization: `Bearer ${jwt.sign({ userId: 11 }, process.env.JWT_SECRET!)}` };
+  const auth = { Cookie: `${SESSION_COOKIE}=${createSession(11).token}` };
   const form = () => { const data = new FormData(); data.append('file', new Blob([Uint8Array.from(makePdf(['Synthetic contract text.']))], { type: 'application/pdf' }), 'test.pdf'); return data; };
   const controller = new AbortController();
   const first = fetch(base, { method: 'POST', headers: auth, body: form(), signal: controller.signal }).catch(() => null);
@@ -93,7 +93,7 @@ test('HTTP invalid uploads and stalled/aborted connections release their admissi
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())); });
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/contracts/parse`;
-  const auth = (id: number) => ({ Authorization: `Bearer ${jwt.sign({ userId: id }, process.env.JWT_SECRET!)}` });
+  const auth = (id: number) => ({ Cookie: `${SESSION_COOKIE}=${createSession(id).token}` });
   const upload = (id: number, filename: string) => {
     const form = new FormData(); form.append('file', new Blob([Uint8Array.from(makePdf(['Synthetic contract text.']))], { type: 'application/pdf' }), filename);
     return fetch(base, { method: 'POST', headers: auth(id), body: form });
@@ -179,7 +179,7 @@ test('HTTP upload → parse → model adapter → verified result; authenticatio
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/contracts`;
-  const auth = (userId = 1) => ({ Authorization: `Bearer ${jwt.sign({ userId }, process.env.JWT_SECRET!)}` });
+  const auth = (userId = 1) => ({ Cookie: `${SESSION_COOKIE}=${createSession(userId).token}` });
   const upload = async (userId = 1, buffer: Uint8Array = makePdf(pages.map(p => p.text))) => {
     const form = new FormData();
     form.append('file', new Blob([Uint8Array.from(buffer)], { type: 'application/pdf' }), 'synthetic.pdf');

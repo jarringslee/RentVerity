@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/app.ts",
     "build": "tsc",
-    "test": "npm run build && node --test dist/tests/contracts.test.js dist/tests/model.test.js dist/tests/chatModel.test.js dist/tests/houseSearch.test.js dist/tests/assistant.test.js dist/tests/business.test.js",
+    "test": "npm run build && node --test dist/tests/contracts.test.js dist/tests/model.test.js dist/tests/chatModel.test.js dist/tests/houseSearch.test.js dist/tests/assistant.test.js dist/tests/business.test.js dist/tests/session.test.js",
     "db:init": "npm run build && node dist/scripts/database.js init",
     "db:seed": "npm run build && node dist/scripts/database.js seed",
     "db:upgrade-search": "npm run build && node dist/scripts/upgradeSearch.js",

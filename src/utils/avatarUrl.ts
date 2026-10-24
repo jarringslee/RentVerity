@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+import { API_BASE_URL } from '../services/config'
 
 /** 前端默认头像（未上传或已清除） */
 export const DEFAULT_AVATAR_PATH = '/images/default-avatar.svg'

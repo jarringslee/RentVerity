@@ -1,15 +1,19 @@
 import { logSafeError } from '../utils/logSafeError';
-import type { Server as HttpServer } from 'http';
+import type { Server as HttpServer, IncomingMessage } from 'http';
+import type { Duplex } from 'node:stream';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
-import jwt from 'jsonwebtoken';
-import { getJwtSecret } from '../config/jwt';
+import { verifySession, type SessionClaims } from '../auth/session';
+import { hasTrustedSource } from '../middleware/csrf';
 import { pool } from '../config/db';
-import { chatFrameSchema, positiveId } from '../utils/validation';
+import { chatFrameSchema } from '../utils/validation';
 import { SerialTaskQueue } from '../utils/serialQueue';
 
-type JwtPayload = { userId: number };
-
 const userSockets = new Map<number, Set<WebSocket>>();
+const sessionSockets = new Map<string, Set<WebSocket>>();
+
+export function closeSessionSockets(sessionId: string) {
+  for (const socket of sessionSockets.get(sessionId) || []) socket.close(4001, 'session ended');
+}
 
 function addSocket(userId: number, ws: WebSocket) {
   let set = userSockets.get(userId);
@@ -41,36 +45,40 @@ export function broadcastToUsers(userIds: number[], payload: object) {
 }
 
 export function attachChatWss(server: HttpServer) {
-  const wss = new WebSocketServer({ server, path: '/ws/chat', maxPayload: 16 * 1024 });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024, handleProtocols: protocols => protocols.has('rentverity-chat') ? 'rentverity-chat' : false });
+  // Cookie 会自动携带；先校验来源/身份，再升级协议，不能依赖 HTTP CORS。
+  const upgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    socket.on('error', () => {});
+    const reject = (status: string) => { socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`); };
+    if (req.url !== '/ws/chat') { reject('404 Not Found'); return; }
+    if (!hasTrustedSource(req.headers, false)) { reject('403 Forbidden'); return; }
+    try {
+      const session = verifySession(req.headers);
+      const protocols = (req.headers['sec-websocket-protocol'] || '').split(',').map(item => item.trim());
+      // 第二个子协议只传非凭证的会话 ID，避免切账号竞态连到另一个身份。
+      if (!protocols.includes('rentverity-chat') || !protocols.includes(`session.${session.jti}`)) { reject('409 Conflict'); return; }
+      (req as IncomingMessage & { session: SessionClaims }).session = session;
+      wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
+    } catch { reject('401 Unauthorized'); }
+  };
+  server.on('upgrade', upgrade);
+  wss.once('close', () => server.off('upgrade', upgrade));
 
   wss.on('connection', (ws, req) => {
     // 包括鉴权失败期间的协议错误，均不能成为未处理的 error 事件。
     ws.on('error', () => {});
-    let userId: number | null = null;
-    try {
-      const host = req.headers.host || 'localhost';
-      const url = new URL(req.url || '/', `http://${host}`);
-      const token = url.searchParams.get('token');
-      if (!token) {
-        ws.close(4001, 'missing token');
-        return;
-      }
-      const payload = jwt.verify(
-        token,
-        getJwtSecret(), { algorithms: ['HS256'] }
-      ) as JwtPayload;
-      userId = Number.isSafeInteger(payload.userId) ? positiveId(payload.userId) : null;
-      if (!userId) throw new Error('invalid identity');
-    } catch {
-      ws.close(4002, 'invalid token');
-      return;
-    }
-
+    const session = (req as IncomingMessage & { session: SessionClaims }).session;
+    const userId = session.userId;
     addSocket(userId, ws);
+    const connections = sessionSockets.get(session.jti) || new Set<WebSocket>();
+    connections.add(ws); sessionSockets.set(session.jti, connections);
+    const expiryTimer = setTimeout(() => ws.close(4001, 'session expired'), Math.max(0, session.exp * 1000 - Date.now()));
+    expiryTimer.unref();
 
     const queue = new SerialTaskQueue(32, logSafeError);
     const processMessage = async (data: RawData) => {
       if (ws.readyState !== WebSocket.OPEN) return;
+      if (Date.now() >= session.exp * 1000) { ws.close(4001, 'session expired'); return; }
       let input: unknown;
       try {
         input = JSON.parse(String(data));
@@ -118,6 +126,7 @@ export function attachChatWss(server: HttpServer) {
           return;
         }
 
+        if (ws.readyState !== WebSocket.OPEN || Date.now() >= session.exp * 1000) return;
         const [ins] = await pool.query(
           `INSERT INTO chat_messages (conversation_id, sender_id, content) VALUES (?, ?, ?)`,
           [convId, userId, content]
@@ -165,7 +174,10 @@ export function attachChatWss(server: HttpServer) {
     });
 
     ws.on('close', () => {
-      if (userId != null) removeSocket(userId, ws);
+      clearTimeout(expiryTimer);
+      removeSocket(userId, ws);
+      connections.delete(ws);
+      if (!connections.size) sessionSockets.delete(session.jti);
     });
   });
 

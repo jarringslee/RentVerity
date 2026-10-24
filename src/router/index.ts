@@ -79,8 +79,9 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach(to => {
-  if (to.meta.requiresAuth && !userStore.getToken()) return { path: '/login', query: { redirect: to.fullPath } }
+router.beforeEach(async to => {
+  await userStore.initializeSession()
+  if (to.meta.requiresAuth && !userStore.isLoggedIn()) return { path: '/login', query: { redirect: to.fullPath } }
 })
 
 export default router

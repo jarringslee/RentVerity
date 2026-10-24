@@ -376,11 +376,20 @@ function applyIncomingMessage(payload: {
   }
 }
 
-function connectWs() {
+async function connectWs() {
+  if (wsConnecting.value) return;
+  const ownerVersion = userStore.getSessionVersion();
+  wsConnecting.value = true;
+  const authenticated = await userStore.refreshSession();
+  if (disposed || !userStore.isCurrentSession(ownerVersion)) return;
+  wsConnecting.value = false;
+  if (!authenticated) { connectionNote.value = '无法确认登录状态，请检查网络后重新连接。'; return; }
   const url = getChatWsUrl();
   if (!url) return;
   socket?.close();
-  const connection = new WebSocket(url);
+  const sessionId = userStore.getSessionId();
+  if (!sessionId) return;
+  const connection = new WebSocket(url, ['rentverity-chat', `session.${sessionId}`]);
   socket = connection;
   wsConnected.value = false;
   wsConnecting.value = true;
@@ -398,10 +407,11 @@ function connectWs() {
     connectedOnce = true;
   };
 
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     if (socket !== connection || disposed) return;
     wsConnected.value = false;
     wsConnecting.value = false;
+    if (event.code === 4001) void userStore.refreshSession();
     connectionNote.value = '连接已断开，草稿保留；重新连接后同步历史，不会自动重发消息。';
   };
 

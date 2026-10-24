@@ -2,24 +2,43 @@
 import userStore from '../stores/userStore'
 import type { HouseQuery } from '../types/houses'
 import { houseFiltersToQuery } from '../utils/houseFilters'
+import { API_BASE_URL } from './config'
+import { sessionFetch, assertCurrentSession } from './sessionRequest'
+import { withAuthMutation } from './authMutation'
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+export { API_BASE_URL }
 
 // 公共请求封装
-const request = async (path: string, options: RequestInit = {}) => {
+const requestOnce = async (path: string, options: RequestInit = {}) => {
   const isAuthRequest = path === '/auth/login' || path === '/auth/register'
-  const token = isAuthRequest ? null : userStore.getToken()
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  const { response: res, version, authRevision } = await sessionFetch(path, {
     ...options,
+    signal: isAuthRequest ? (options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000)) : options.signal,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {})
     }
-  })
-  if (res.status === 401 && !isAuthRequest) userStore.expireSession(token)
+  }, isAuthRequest)
   const payload = await res.json().catch(() => null)
+  if (isAuthRequest && !payload) throw new Error('无法确认登录结果，请重新检查登录状态。')
+  if (!isAuthRequest && res.status !== 401) assertCurrentSession(version, authRevision)
   return payload ?? { success: false, message: res.status === 401 ? '登录已过期，请重新登录。' : '服务端返回异常，请稍后重试。' }
+}
+
+const request = async (path: string, options: RequestInit = {}) => {
+  if (path !== '/auth/login' && path !== '/auth/register') return requestOnce(path, options)
+  try {
+    return await withAuthMutation(async () => {
+      const result = await requestOnce(path, options)
+      // Cookie 已由浏览器处理；身份更新和通知也必须在认证锁释放之前完成。
+      if (result.success) userStore.setCurrentUser(result.data)
+      return result
+    })
+  } catch (error) {
+    // Set-Cookie 可能已到达而正文读取失败，解除锁后重新核对浏览器实际持有的身份。
+    await userStore.refreshSession()
+    throw error
+  } finally { await userStore.initializeSession() }
 }
 
 
@@ -73,20 +92,17 @@ export const updateUserProfile = async (payload: {
   })
 }
 
-/** 上传头像（multipart 字段 avatar）；可用 tokenOverride 在注册成功后立即上传 */
-export const uploadUserAvatar = async (file: File, tokenOverride?: string | null) => {
-  const token = tokenOverride ?? userStore.getToken?.()
+/** 上传头像（multipart 字段 avatar），由浏览器携带 HttpOnly Cookie。 */
+export const uploadUserAvatar = async (file: File) => {
   const form = new FormData()
   form.append('avatar', file)
-  const headers: Record<string, string> = {}
-  if (token) headers.Authorization = `Bearer ${token}`
-  const res = await fetch(`${API_BASE_URL}/users/me/avatar`, {
+  const { response: res, version, authRevision } = await sessionFetch('/users/me/avatar', {
     method: 'POST',
-    headers,
     body: form
   })
-  if (res.status === 401) userStore.expireSession(token)
-  return res.json()
+  const result = await res.json()
+  if (res.status !== 401) assertCurrentSession(version, authRevision)
+  return result
 }
 
 // 修改密码：需原密码；后端校验新密码不可与旧密码相同（需登录）
@@ -193,9 +209,8 @@ export const getHouseCities = () => request('/houses/cities')
 /** WebSocket 聊天地址（需在登录后调用） */
 export const getChatWsUrl = (): string => {
   const base = API_BASE_URL.replace(/^http/, 'ws')
-  const token = userStore.getToken?.()
-  if (!token) return ''
-  return `${base}/ws/chat?token=${encodeURIComponent(token)}`
+  if (!userStore.isLoggedIn()) return ''
+  return `${base}/ws/chat`
 }
 
 export const ensureChatConversation = async (payload: {

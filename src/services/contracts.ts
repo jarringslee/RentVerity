@@ -1,5 +1,5 @@
 import userStore from '../stores/userStore'
-import { API_BASE_URL } from './api'
+import { sessionFetch, assertCurrentSession } from './sessionRequest'
 import type { ContractAnalysis, ParsedContract } from '../types/contracts'
 
 export class ContractApiError extends Error {
@@ -7,18 +7,17 @@ export class ContractApiError extends Error {
 }
 
 async function contractRequest<T>(path: string, options: RequestInit): Promise<T> {
-  const token = userStore.getToken()
-  if (!token) throw new ContractApiError(401, 'AUTH_REQUIRED', '请先登录后分析合同。')
+  if (!userStore.isLoggedIn()) throw new ContractApiError(401, 'AUTH_REQUIRED', '请先登录后分析合同。')
   const headers = new Headers(options.headers)
-  headers.set('Authorization', `Bearer ${token}`)
   const deadline = AbortSignal.timeout(path === '/parse' ? 80000 : 130000)
   const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline
   let response: Response
   let payload: any
   try {
-    response = await fetch(`${API_BASE_URL}/contracts${path}`, { ...options, headers, signal })
-    if (response.status === 401) userStore.expireSession(token)
+    const request = await sessionFetch(`/contracts${path}`, { ...options, headers, signal })
+    response = request.response
     payload = await response.json().catch(error => { if (signal.aborted) throw error; return null })
+    if (response.status !== 401) assertCurrentSession(request.version, request.authRevision)
   }
   catch (error) {
     if (options.signal?.aborted) throw error

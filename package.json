@@ -8,6 +8,7 @@
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "test:chat": "node --experimental-strip-types --test scripts/chat-state.test.cjs",
+    "test:session": "node --test scripts/session-state.test.cjs",
     "check:sensitive": "node scripts/check-sensitive-files.cjs"
   },
   "dependencies": {

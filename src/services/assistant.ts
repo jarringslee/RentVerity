@@ -1,5 +1,5 @@
 import userStore from '../stores/userStore'
-import { API_BASE_URL } from './api'
+import { sessionFetch, assertCurrentSession } from './sessionRequest'
 import { SseFrames } from '../utils/sse'
 import { validateHouseFilters } from '../utils/houseFilters'
 import type { HouseFilters } from '../types/houses'
@@ -23,8 +23,7 @@ export function parseAssistantEvent(event: string, data: any): AssistantEvent {
 }
 
 export async function streamAssistantMessage(body: { message: string; history: { role: 'user' | 'assistant'; content: string }[]; context: HouseFilters }, signal: AbortSignal, onEvent: (event: AssistantEvent) => void): Promise<void> {
-  const token = userStore.getToken()
-  if (!token) throw new AssistantApiError('AUTH_REQUIRED', '请先登录后使用 AI 助手。')
+  if (!userStore.isLoggedIn()) throw new AssistantApiError('AUTH_REQUIRED', '请先登录后使用 AI 助手。')
   const local = new AbortController(), combined = AbortSignal.any([signal, local.signal])
   let idle = false, total = false
   let idleTimer: ReturnType<typeof setTimeout>
@@ -33,10 +32,9 @@ export async function streamAssistantMessage(body: { message: string; history: {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
     resetIdle()
-    const response = await fetch(`${API_BASE_URL}/assistant/message`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', Authorization: `Bearer ${token}` }, body: JSON.stringify(body), signal: combined
+    const { response, version, authRevision } = await sessionFetch('/assistant/message', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify(body), signal: combined
     })
-    if (response.status === 401) userStore.expireSession(token)
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
       throw new AssistantApiError(payload?.code ?? 'REQUEST_FAILED', payload?.message ?? (response.status === 401 ? '登录已过期，请重新登录。' : '助手请求失败，请重试。'))
@@ -57,7 +55,7 @@ export async function streamAssistantMessage(body: { message: string; history: {
         if (event.event === 'houses') { if (!seenContext || seenHouses || intent !== 'house_search' || event.data.filters.city !== contextCity) throw invalid(); seenHouses = true }
         if (event.event === 'delta') { if (!seenContext) throw invalid(); characters += event.data.text.length; if (characters > 12000) throw invalid() }
         if (event.event === 'done' && (!seenContext || characters === 0)) throw invalid()
-        combined.throwIfAborted(); onEvent(event)
+        combined.throwIfAborted(); assertCurrentSession(version, authRevision); onEvent(event)
         if (event.event === 'done') { complete = true; break outer }
       }
     }
