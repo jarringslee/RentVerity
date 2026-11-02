@@ -9,8 +9,8 @@
         <el-button type="primary" @click="router.push({ path: '/login', query: { redirect: '/contract-analysis' } })">前往登录</el-button>
       </el-alert>
       <el-card class="upload-card">
-        <div class="upload-heading"><h2>选择一份文字型 PDF</h2><el-tag type="info">单文件 ≤10 MB · ≤40 页</el-tag></div>
-        <p class="muted">仅支持可提取文字的 PDF，提取文本最多 60000 字符。暂不支持扫描件、加密 PDF、DOC/DOCX。</p>
+        <div class="upload-heading"><h2>选择一份文字型 PDF</h2><el-tag type="info">≤{{ Math.floor(limits.maxBytes / 1024 / 1024) }} MiB · ≤{{ limits.maxPages }} 页</el-tag></div>
+        <p class="muted">提取文本最多 {{ limits.maxCharacters }} 字符、{{ limits.maxChunks }} 块，最终最多展示20条有原文依据的提示。暂不支持扫描件、加密 PDF、DOC/DOCX。</p>
         <div class="drop-zone" :class="{ dragging, disabled: busy || !isLoggedIn, 'has-file': file }"
           @dragenter.prevent="onDragEnter" @dragover.prevent @dragleave.prevent="onDragLeave" @drop.prevent="onDrop">
           <span class="file-badge" aria-hidden="true">PDF</span>
@@ -24,19 +24,20 @@
         <ol class="process-steps" aria-label="合同处理步骤"><li v-for="(step, index) in steps" :key="step.label" :class="step.state" :aria-current="step.state === 'active' ? 'step' : undefined"><span>{{ step.state === 'done' ? '✓' : index + 1 }}</span>{{ step.label }}</li></ol>
         <el-checkbox v-model="consent" :disabled="busy || !isLoggedIn" class="consent">我确认可使用该文件，并同意将提取文本发送至 DeepSeek 分析；请先移除个人敏感信息。</el-checkbox>
         <div class="upload-actions">
-          <el-button type="primary" :disabled="!file || !consent || !isLoggedIn || !!result || selecting" :loading="busy" @click="startAnalysis">{{ stage === 'error' || stage === 'stopped' ? '重新分析' : '开始分析' }}</el-button>
+          <el-button type="primary" :disabled="!file || !consent || !isLoggedIn || stage === 'done' || selecting" :loading="busy" @click="startAnalysis">{{ buttonText }}</el-button>
           <el-button v-if="busy" @click="cancelAnalysis">停止本次请求</el-button>
           <el-button v-else :disabled="!file" @click="clearFile">清除文件</el-button>
           <span class="stage-text" role="status" aria-live="polite">{{ selecting ? '正在检查文件…' : stageText }}</span>
         </div>
         <el-alert v-if="selectionError || errorMessage" :title="selectionError || errorMessage" type="error" :closable="false" show-icon class="status-alert" />
-        <p class="privacy-note">预览在本地进行，点击开始后才上传。原 PDF 不写服务器磁盘；页文本/结果 15 分钟到期并定期清理，无历史记录。停止不保证模型未计费，结果需完整核验后才展示。文件限制不等于病毒扫描，请勿上传来源不明的文件。</p>
+        <p v-if="task?.chunks.length" class="block-progress" role="status">已核验 {{ doneBlocks }}/{{ task.chunks.length }} 块 · 未完成/失败 {{ failedBlocks }} 块 · 模型调用 {{ task.stats.modelCalls }} 次 · 重试 {{ task.stats.retries }} 次</p>
+        <p class="privacy-note">选择文件只做本地文件头校验；点击开始分析才上传，预览需单独打开。原文件流式写入私有临时目录，由独立进程解析；按需回收，TTL与定期清扫兜底，无合同历史。任务最长约{{ Math.ceil(limits.taskTimeoutMs / 60000) }}分钟，部分失败不代表全文成功。刷新需重新选文件；停止不保证模型未计费。隔离与限制不是病毒查杀或完整安全沙箱。</p>
       </el-card>
 
       <div v-if="file" class="review-grid">
         <section ref="previewPanel" class="preview-panel">
           <el-card><template #header><h2>合同原文</h2></template>
-            <ContractPdfPreview :file="file" v-model:page="currentPage" />
+            <ContractPdfPreview ref="pdfPreview" :file="file" v-model:page="currentPage" />
             <blockquote v-if="activeFinding" class="active-quote"><strong>第 {{ activeFinding.page }} 页引用</strong><p>{{ activeFinding.quote }}</p></blockquote>
           </el-card>
         </section>
@@ -48,7 +49,7 @@
           </el-card>
           <template v-else>
             <el-card class="summary-card">
-              <h2>AI 合同摘要</h2><p class="summary-text">{{ result.summary }}</p>
+              <h2>{{ stage === 'done' ? '合同分块核验结果' : '部分结果 · 非全文分析成功' }}</h2><p class="summary-text">{{ result.summary }}</p>
               <div class="risk-counts"><el-tag type="danger">高 {{ counts.high }}</el-tag><el-tag type="warning">中 {{ counts.medium }}</el-tag><el-tag type="info">低 {{ counts.low }}</el-tag><span>已核对引用 {{ result.findings.length }} 项</span></div>
               <p v-for="warning in result.warnings" :key="warning" class="result-warning">{{ warning }}</p>
             </el-card>
@@ -72,149 +73,134 @@ import { useRouter } from 'vue-router'
 import HeaderUserMenu from '../components/HeaderUserMenu.vue'
 import ContractPdfPreview from '../components/ContractPdfPreview.vue'
 import userStore from '../stores/userStore'
-import { analyzeContract, ContractApiError, discardContract, parseContract } from '../services/contracts'
-import type { ContractAnalysis, ContractFinding, ParsedContract } from '../types/contracts'
-import { validateContractSelection } from '../utils/contractFile'
+import { ContractApiError, discardContract, getContractLimits, getContractTask, retryContractTask, uploadContractTask } from '../services/contracts'
+import type { ContractAnalysis, ContractFinding, ContractTask, ContractLimits } from '../types/contracts'
+import { CONTRACT_FILE_LIMITS, validateContractSelection } from '../utils/contractFile'
 
 const router = useRouter()
 const isLoggedIn = computed(() => userStore.isLoggedIn())
-const file = shallowRef<File | null>(null)
-const fileInput = ref<HTMLInputElement | null>(null)
-const previewPanel = ref<HTMLElement | null>(null)
-const consent = ref(false)
-const parsed = ref<ParsedContract | null>(null)
-const result = ref<ContractAnalysis | null>(null)
-const activeFinding = ref<ContractFinding | null>(null)
+const file = shallowRef<File | null>(null), fileInput = ref<HTMLInputElement | null>(null)
+const previewPanel = ref<HTMLElement | null>(null), pdfPreview = ref<{ open: () => void } | null>(null)
+const consent = ref(false), task = ref<ContractTask | null>(null), taskId = ref<string | null>(null)
+const limits = ref<ContractLimits>({ ...CONTRACT_FILE_LIMITS, maxChunks: 64, maxFindings: 20, uploadTimeoutMs: 180000, taskTimeoutMs: 720000, ttlMs: 900000 })
+const result = ref<ContractAnalysis | null>(null), activeFinding = ref<ContractFinding | null>(null)
 const currentPage = ref(1)
-const stage = ref<'idle' | 'parsing' | 'analyzing' | 'done' | 'error' | 'stopped'>('idle')
-const errorMessage = ref('')
-const selectionError = ref('')
-const selecting = ref(false)
-const dragging = ref(false)
-let dragDepth = 0
-let selectionVersion = 0
-let documentOwner: number | null = null
-const busy = computed(() => stage.value === 'parsing' || stage.value === 'analyzing')
-const stageText = computed(() => ({ idle: file.value ? '准备就绪，确认授权后开始' : '待选择文件', parsing: '正在上传并解析 PDF…', analyzing: '正在分析并核对原文…', done: '分析完成，请逐条核实提示', error: '处理未完成，可检查提示后重试', stopped: '本次已停止，可重新分析' })[stage.value])
+const stage = ref<'idle' | 'uploading' | 'parsing' | 'analyzing' | 'partial' | 'done' | 'error' | 'stopped'>('idle')
+const errorMessage = ref(''), selectionError = ref(''), selecting = ref(false), dragging = ref(false)
+let dragDepth = 0, selectionVersion = 0, runVersion = 0, documentOwner: number | null = null
+let controller: AbortController | null = null
+const busy = computed(() => ['uploading', 'parsing', 'analyzing'].includes(stage.value))
+const parsed = computed(() => task.value && task.value.pageCount > 0 ? task.value : null)
+const doneBlocks = computed(() => task.value?.chunks.filter(c => c.state === 'succeeded').length ?? 0)
+const failedBlocks = computed(() => task.value?.chunks.filter(c => c.state === 'failed').length ?? 0)
+const canRetryBlocks = computed(() => !!task.value?.chunks.length && ['partial', 'failed'].includes(task.value.state) && task.value.stats.manualRetries < 1)
+const stageText = computed(() => ({
+  idle: file.value ? '文件仅在本地，确认后开始上传' : '待选择文件',
+  uploading: '正在流式上传并核对接收完整性…',
+  parsing: '已完整接收，正在隔离进程中解析…',
+  analyzing: '正在分块分析并逐块核验原文…',
+  partial: '仅部分分块完成，不能视为全文分析成功',
+  done: '全部分块已完成，请逐条核实提示',
+  error: '任务未完整完成，请查看提示',
+  stopped: '已停止并请求回收服务器临时资源'
+})[stage.value])
 const steps = computed(() => [
   { label: '选择合同', state: file.value ? 'done' : 'active' },
-  { label: '解析文字', state: parsed.value ? 'done' : stage.value === 'parsing' ? 'active' : 'waiting' },
-  { label: 'AI 分析与核验', state: result.value ? 'done' : stage.value === 'analyzing' ? 'active' : 'waiting' },
+  { label: '接收与隔离解析', state: parsed.value ? 'done' : ['uploading', 'parsing'].includes(stage.value) ? 'active' : 'waiting' },
+  { label: '分块分析与核验', state: stage.value === 'done' ? 'done' : stage.value === 'analyzing' ? 'active' : 'waiting' },
   { label: '核对原文', state: result.value ? 'active' : 'waiting' }
 ])
 const severityNames = { high: '高', medium: '中', low: '低' }
 const counts = computed(() => (result.value?.findings ?? []).reduce((all, finding) => { all[finding.severity]++; return all }, { high: 0, medium: 0, low: 0 }))
-let controller: AbortController | null = null
-let runVersion = 0
+const buttonText = computed(() => canRetryBlocks.value ? '只重试未完成块' : taskId.value && stage.value === 'error' ? '继续查看任务' : ['error', 'stopped'].includes(stage.value) ? '重新上传分析' : '开始分析')
 
 function releaseSession() {
-  if (parsed.value && documentOwner === userStore.getSessionVersion() && userStore.isLoggedIn()) void discardContract(parsed.value.documentId).catch(() => {})
-  parsed.value = null
-  documentOwner = null
+  const id = taskId.value
+  if (id && documentOwner === userStore.getSessionVersion() && userStore.isLoggedIn()) void discardContract(id).catch(() => {})
+  taskId.value = null; task.value = null; documentOwner = null
 }
-
 function cancelAnalysis() {
-  ++runVersion
-  controller?.abort()
-  controller = null
-  selectionError.value = ''
-  stage.value = 'stopped'
+  ++runVersion; controller?.abort(); controller = null
+  releaseSession(); selectionError.value = ''; stage.value = 'stopped'
 }
-
 function clearFile() {
-  ++selectionVersion
-  selecting.value = false
-  cancelAnalysis()
-  releaseSession()
-  file.value = null
-  result.value = null
-  activeFinding.value = null
-  currentPage.value = 1
-  errorMessage.value = ''
-  consent.value = false
-  selectionError.value = ''
-  stage.value = 'idle'
-  dragging.value = false
-  dragDepth = 0
+  ++selectionVersion; selecting.value = false; cancelAnalysis()
+  file.value = null; result.value = null; activeFinding.value = null; currentPage.value = 1
+  errorMessage.value = ''; consent.value = false; selectionError.value = ''; stage.value = 'idle'; dragging.value = false; dragDepth = 0
   if (fileInput.value) fileInput.value.value = ''
 }
-
 async function selectCandidates(files: File[]) {
-  if (!isLoggedIn.value || busy.value) { selectionError.value = busy.value ? '请先停止当前请求，再替换文件。' : '请先登录后选择合同。'; return }
-  const version = ++selectionVersion
-  selecting.value = true
-  selectionError.value = ''
+  if (!isLoggedIn.value || busy.value) { selectionError.value = busy.value ? '请先停止任务，再替换文件。' : '请先登录。'; return }
+  const version = ++selectionVersion; selecting.value = true; selectionError.value = ''
   try {
     const candidate = await validateContractSelection(files)
     if (version !== selectionVersion) return
-    // 验证成功后才清空旧合同；取消选择或无效替换不能丢失原结果。
-    clearFile()
-    file.value = candidate
-  } catch (error) {
-    if (version === selectionVersion) selectionError.value = error instanceof Error ? error.message : '无法读取文件，请重新选择。'
-  } finally { if (version === selectionVersion) selecting.value = false }
+    clearFile(); file.value = candidate
+  } catch (error) { if (version === selectionVersion) selectionError.value = error instanceof Error ? error.message : '无法读取文件。' }
+  finally { if (version === selectionVersion) selecting.value = false }
 }
-
 function selectFile(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files ?? [])
-  input.value = '' // 同一文件可再次选择；关闭选择框不会清除现有合同。
-  if (files.length) void selectCandidates(files)
+  const input = event.target as HTMLInputElement, files = Array.from(input.files ?? [])
+  input.value = ''; if (files.length) void selectCandidates(files)
 }
-function onDragEnter(event: DragEvent) {
-  if (!event.dataTransfer?.types.includes('Files')) return
-  dragDepth++
-  if (!busy.value && isLoggedIn.value) dragging.value = true
-}
+function onDragEnter(event: DragEvent) { if (event.dataTransfer?.types.includes('Files')) { dragDepth++; if (!busy.value && isLoggedIn.value) dragging.value = true } }
 function onDragLeave() { if (--dragDepth <= 0) { dragDepth = 0; dragging.value = false } }
 function onDrop(event: DragEvent) {
   dragDepth = 0; dragging.value = false
   const transfer = event.dataTransfer
   if (!transfer) return
-  if (Array.from(transfer.items).some(item => item.webkitGetAsEntry?.()?.isDirectory)) { selectionError.value = '不支持上传文件夹，请选择一份 PDF。'; return }
+  if (Array.from(transfer.items).some(item => item.webkitGetAsEntry?.()?.isDirectory)) { selectionError.value = '不支持文件夹，请选择一份PDF。'; return }
   void selectCandidates(Array.from(transfer.files))
 }
-
+function applyTask(snapshot: ContractTask) {
+  task.value = snapshot
+  if (snapshot.result) result.value = snapshot.result
+  stage.value = snapshot.state === 'completed' ? 'done' : snapshot.state === 'partial' ? 'partial' : snapshot.state === 'failed' ? 'error' : snapshot.state === 'cancelled' ? 'stopped' : snapshot.state === 'analyzing' ? 'analyzing' : snapshot.state === 'receiving' ? 'uploading' : 'parsing'
+  if (['failed', 'partial', 'cancelled'].includes(snapshot.state)) errorMessage.value = snapshot.errorCode === 'CONTRACT_INCOMPLETE' ? '存在未完成块；已成功块不会自动重跑，可在预算和时限内手动重试失败部分。' : '任务未完整完成：' + (snapshot.errorCode ?? snapshot.state)
+}
+async function pause(signal: AbortSignal) {
+  await new Promise<void>((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); reject(signal.reason) }
+    const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, 800)
+    signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort()
+  })
+}
 async function startAnalysis() {
-  if (!file.value || !consent.value || busy.value || selecting.value || !isLoggedIn.value) return
-  const version = ++runVersion
-  controller = new AbortController()
-  const signal = controller.signal
-  result.value = null
-  activeFinding.value = null
-  errorMessage.value = ''
-  selectionError.value = ''
-  const ownerVersion = userStore.getSessionVersion()
-  if (!userStore.isLoggedIn() || version !== runVersion || !file.value) return
+  if (!file.value || !consent.value || busy.value || selecting.value || !isLoggedIn.value || stage.value === 'done') return
+  const version = ++runVersion, ownerVersion = userStore.getSessionVersion(), candidate = file.value
+  controller = new AbortController(); const signal = controller.signal
+  errorMessage.value = ''; selectionError.value = ''; activeFinding.value = null; stage.value = 'uploading'
   try {
-    if (!parsed.value || new Date(parsed.value.expiresAt).getTime() <= Date.now()) {
-      releaseSession()
-      stage.value = 'parsing'
-      const document = await parseContract(file.value, signal)
-      if (version !== runVersion) { if (userStore.isCurrentSession(ownerVersion)) void discardContract(document.documentId).catch(() => {}); return }
-      parsed.value = document
-      documentOwner = ownerVersion
+    limits.value = await getContractLimits(signal)
+    if (candidate.size > limits.value.maxBytes) throw new Error('文件超过服务端当前大小上限。')
+    let current: ContractTask | null = null
+    if (taskId.value) {
+      if (canRetryBlocks.value) current = await retryContractTask(taskId.value, signal)
+      else try { current = await getContractTask(taskId.value, signal) } catch (error) { if (!(error instanceof ContractApiError && error.code === 'CONTRACT_NOT_FOUND')) throw error; releaseSession() }
     }
-    stage.value = 'analyzing'
-    const analysis = await analyzeContract(parsed.value.documentId, signal)
-    if (version !== runVersion) return
-    result.value = analysis
-    stage.value = 'done'
+    if (current && ['failed', 'cancelled'].includes(current.state) && !current.chunks.length) { releaseSession(); current = null }
+    if (!current) {
+      result.value = null; task.value = null; taskId.value = crypto.randomUUID(); documentOwner = ownerVersion
+      current = await uploadContractTask(candidate, taskId.value, signal, limits.value.uploadTimeoutMs + 15000)
+    }
+    const since = Date.now()
+    while (version === runVersion) {
+      applyTask(current)
+      if (!['receiving', 'queued', 'parsing', 'analyzing'].includes(current.state)) break
+      if (Date.now() - since > limits.value.taskTimeoutMs + 15000) { cancelAnalysis(); throw new Error('任务等待超时，已请求停止。') }
+      await pause(signal); current = await getContractTask(taskId.value!, signal)
+    }
   } catch (error) {
     if (version !== runVersion || signal.aborted) return
-    if (error instanceof ContractApiError && error.code === 'CONTRACT_NOT_FOUND') releaseSession()
-    errorMessage.value = error instanceof Error ? error.message : '分析失败，请重试。'
-    stage.value = 'error'
+    stage.value = 'error'; errorMessage.value = error instanceof Error ? error.message : '任务失败，请重试。'
   } finally { if (version === runVersion) controller = null }
 }
-
 function locateFinding(finding: ContractFinding) {
-  activeFinding.value = finding
-  currentPage.value = finding.page
+  activeFinding.value = finding; currentPage.value = finding.page; pdfPreview.value?.open()
   previewPanel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
-
 watch(() => userStore.sessionVersion.value, () => clearFile(), { flush: 'sync' })
+watch(isLoggedIn, loggedIn => { if (loggedIn) void getContractLimits().then(value => { limits.value = value }).catch(() => {}) }, { immediate: true })
 onBeforeUnmount(clearFile)
 </script>
 

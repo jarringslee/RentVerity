@@ -1,5 +1,8 @@
 <template>
   <section class="pdf-preview" aria-label="合同 PDF 预览">
+    <p v-if="!previewEnabled" class="preview-note">文件尚未进行本地解析。预览为独立操作，可能占用内存；大文件建议先分析，需要核对时再按需打开。</p>
+    <el-button v-if="!previewEnabled" @click="previewEnabled = true">打开本地预览</el-button>
+    <el-button v-else size="small" @click="previewEnabled = false">关闭预览并释放资源</el-button>
     <div class="pdf-toolbar">
       <el-button size="small" :disabled="page <= 1 || !pageCount" @click="changePage(page - 1)">上一页</el-button>
       <span>第 {{ page }} / {{ pageCount || '—' }} 页</span>
@@ -14,9 +17,8 @@
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { getDocument, GlobalWorkerOptions, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from 'pdfjs-dist'
+import { getDocument, GlobalWorkerOptions, PDFDataRangeTransport, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
-import { CONTRACT_FILE_LIMITS } from '../utils/contractFile'
 
 GlobalWorkerOptions.workerSrc = workerUrl
 const props = defineProps<{ file: File; page: number }>()
@@ -26,6 +28,17 @@ const container = ref<HTMLElement | null>(null)
 const pageCount = ref(0)
 const loading = ref(false)
 const error = ref('')
+const previewEnabled = ref(false)
+defineExpose({ open: () => { previewEnabled.value = true } })
+
+class LocalFileRange extends PDFDataRangeTransport {
+  private stopped = false
+  constructor(private file: File, first: Uint8Array) { super(file.size, first, false) }
+  override requestDataRange(begin: number, end: number) {
+    void this.file.slice(begin, end).arrayBuffer().then(data => { if (!this.stopped) this.onDataRange(begin, new Uint8Array(data)) }).catch(() => this.abort())
+  }
+  override abort() { this.stopped = true }
+}
 let document: PDFDocumentProxy | null = null
 let loadingTask: PDFDocumentLoadingTask | null = null
 let renderTask: RenderTask | null = null
@@ -66,7 +79,7 @@ function renderPage() {
   })
 }
 
-watch(() => props.file, async file => {
+watch(() => [props.file, previewEnabled.value] as const, async ([file, enabled]) => {
   const version = ++loadVersion
   ++renderVersion
   renderTask?.cancel()
@@ -77,16 +90,16 @@ watch(() => props.file, async file => {
   loading.value = true
   await loadingTask?.destroy().catch(() => {})
   if (version !== loadVersion) return
+  if (!enabled) { loadingTask = null; loading.value = false; return }
   try {
     await nextTick()
-    const data = new Uint8Array(await file.arrayBuffer())
+    const first = new Uint8Array(await file.slice(0, 65536).arrayBuffer())
     if (version !== loadVersion) return
     const baseUrl = import.meta.env.BASE_URL
-    const currentTask = getDocument({ data, cMapUrl: `${baseUrl}pdfjs-assets/cmaps/`, cMapPacked: true, standardFontDataUrl: `${baseUrl}pdfjs-assets/standard_fonts/`, useWasm: false })
+    const currentTask = getDocument({ range: new LocalFileRange(file, first), rangeChunkSize: 65536, disableAutoFetch: true, disableStream: true, enableXfa: false, cMapUrl: `${baseUrl}pdfjs-assets/cmaps/`, cMapPacked: true, standardFontDataUrl: `${baseUrl}pdfjs-assets/standard_fonts/`, useWasm: false })
     loadingTask = currentTask
     const pdf = await currentTask.promise
     if (version !== loadVersion) { await currentTask.destroy(); return }
-    if (pdf.numPages > CONTRACT_FILE_LIMITS.maxPages) { await currentTask.destroy(); throw new Error('Page limit') }
     document = pdf
     pageCount.value = pdf.numPages
     renderPage()
@@ -98,7 +111,8 @@ watch(() => props.file, async file => {
   }
 }, { immediate: true })
 
-watch(() => props.page, renderPage)
+watch(() => props.page, () => { if (!previewEnabled.value) previewEnabled.value = true; else renderPage() })
+watch(() => props.file, () => { previewEnabled.value = false })
 onMounted(() => {
   resizeObserver = new ResizeObserver(() => { if (document) renderPage() })
   if (container.value) resizeObserver.observe(container.value)

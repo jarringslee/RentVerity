@@ -10,14 +10,14 @@ import housesRouter from './routes/houses';
 import favoritesRouter from './routes/favorites';
 import usersRouter from './routes/users';
 import chatRouter from './routes/chat';
-import contractsRouter from './routes/contracts';
+import contractsRouter, { createContractsRouter, getContractTaskManager } from './routes/contracts';
 import assistantRouter, { createAssistantRouter } from './routes/assistant';
 import { attachChatWss } from './ws/chatGateway';
 import { getJwtSecret } from './config/jwt';
 import { logSafeError } from './utils/logSafeError';
 import { isAllowedOrigin, requireTrustedSource } from './middleware/csrf';
 
-export function createApp(options: { assistant?: Parameters<typeof createAssistantRouter>[0] } = {}) {
+export function createApp(options: { assistant?: Parameters<typeof createAssistantRouter>[0]; contracts?: Parameters<typeof createContractsRouter>[0] } = {}) {
 const app = express();
 
 fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
@@ -51,7 +51,7 @@ app.use('/houses', housesRouter);
 app.use('/favorites', favoritesRouter);
 app.use('/users', usersRouter);
 app.use('/chat', chatRouter);
-app.use('/contracts', contractsRouter);
+app.use('/contracts', options.contracts ? createContractsRouter(options.contracts) : contractsRouter);
 app.use('/assistant', options.assistant ? createAssistantRouter(options.assistant) : assistantRouter);
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -68,10 +68,19 @@ getJwtSecret();
 const PORT = Number(process.env.PORT) || 3001;
 
 const server = http.createServer(createApp());
-attachChatWss(server);
+const chatWss = attachChatWss(server);
+let stopping = false;
 
-server.listen(PORT, () => {
+void getContractTaskManager().initialize().then(() => { if (!stopping) server.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
   console.log(`WebSocket chat at ws://localhost:${PORT}/ws/chat`);
-});
+}); }).catch(() => { console.error('Contract temporary storage initialization failed'); process.exitCode = 1; });
+const shutdown = () => {
+  if (stopping) return; stopping = true;
+  for (const socket of chatWss.clients) socket.terminate();
+  server.closeAllConnections(); server.close(() => {});
+  // 回收立即开始，不等待浏览器或升级后的WebSocket主动关闭。
+  void getContractTaskManager().close().catch(() => { console.error('Contract shutdown cleanup pending'); process.exitCode = 1; }).finally(() => pool.end()).catch(() => { process.exitCode = 1; });
+};
+process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
 }

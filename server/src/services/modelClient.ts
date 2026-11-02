@@ -13,7 +13,7 @@ export interface ModelMessage {
   content: string;
 }
 
-export type CompleteJson = (messages: ModelMessage[], signal?: AbortSignal) => Promise<unknown>;
+export type CompleteJson = (messages: ModelMessage[], signal?: AbortSignal, options?: { maxOutputTokens?: number }) => Promise<unknown>;
 
 export function readModelConfig(): ModelConfig {
   const apiKey = process.env.AI_API_KEY?.trim();
@@ -55,7 +55,7 @@ async function readLimitedBody(response: Response): Promise<string> {
 }
 
 export function createModelClient(config: ModelConfig): CompleteJson {
-  return async (messages, signal) => {
+  return async (messages, signal, options) => {
     const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
     const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     try {
@@ -68,7 +68,7 @@ export function createModelClient(config: ModelConfig): CompleteJson {
           messages,
           response_format: { type: 'json_object' },
           stream: false,
-          max_tokens: 6000,
+          max_tokens: options?.maxOutputTokens ?? 6000,
           ...(new URL(config.baseUrl).hostname === 'api.deepseek.com' ? { thinking: { type: 'disabled' } } : {})
         })
       });
@@ -97,4 +97,4 @@ export function createModelClient(config: ModelConfig): CompleteJson {
   };
 }
 
-export const completeConfiguredJson: CompleteJson = (messages, signal) => createModelClient(readModelConfig())(messages, signal);
+export const completeConfiguredJson: CompleteJson = (messages, signal, options) => createModelClient(readModelConfig())(messages, signal, options);

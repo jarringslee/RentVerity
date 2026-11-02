@@ -11,6 +11,7 @@
     "test:session": "node --test scripts/session-state.test.cjs",
     "test:assistant": "node --test scripts/assistant-protocol.test.cjs",
     "test:assistant:ui": "node scripts/assistant-reliability-ui.cjs",
+    "test:contract:ui": "node scripts/contract-long-ui.cjs",
     "check:sensitive": "node scripts/check-sensitive-files.cjs"
   },
   "dependencies": {

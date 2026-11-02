@@ -1,15 +1,15 @@
 import userStore from '../stores/userStore'
 import { sessionFetch, assertCurrentSession } from './sessionRequest'
-import type { ContractAnalysis, ParsedContract } from '../types/contracts'
+import type { ContractLimits, ContractTask } from '../types/contracts'
 
 export class ContractApiError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message) }
 }
 
-async function contractRequest<T>(path: string, options: RequestInit): Promise<T> {
+async function contractRequest<T>(path: string, options: RequestInit, timeoutMs = 15000): Promise<T> {
   if (!userStore.isLoggedIn()) throw new ContractApiError(401, 'AUTH_REQUIRED', '请先登录后分析合同。')
   const headers = new Headers(options.headers)
-  const deadline = AbortSignal.timeout(path === '/parse' ? 80000 : 130000)
+  const deadline = AbortSignal.timeout(timeoutMs)
   const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline
   let response: Response
   let payload: any
@@ -31,17 +31,13 @@ async function contractRequest<T>(path: string, options: RequestInit): Promise<T
   return payload.data as T
 }
 
-export function parseContract(file: File, signal: AbortSignal): Promise<ParsedContract> {
+export function uploadContractTask(file: File, taskId: string, signal: AbortSignal, timeoutMs: number): Promise<ContractTask> {
   const form = new FormData()
   form.append('file', file)
   // FormData 的 Content-Type 边界由浏览器生成，不能手写 application/json。
-  return contractRequest('/parse', { method: 'POST', body: form, signal })
+  return contractRequest('/tasks', { method: 'POST', headers: { 'X-Contract-Task-Id': taskId, 'X-Contract-File-Size': String(file.size) }, body: form, signal }, timeoutMs)
 }
-
-export function analyzeContract(documentId: string, signal: AbortSignal): Promise<ContractAnalysis> {
-  return contractRequest('/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ documentId }), signal })
-}
-
-export async function discardContract(documentId: string): Promise<void> {
-  await contractRequest(`/${encodeURIComponent(documentId)}`, { method: 'DELETE', keepalive: true })
-}
+export const getContractLimits = (signal?: AbortSignal) => contractRequest<ContractLimits>('/limits', { method: 'GET', signal })
+export const getContractTask = (id: string, signal: AbortSignal) => contractRequest<ContractTask>(`/tasks/${encodeURIComponent(id)}`, { method: 'GET', signal })
+export const retryContractTask = (id: string, signal: AbortSignal) => contractRequest<ContractTask>(`/tasks/${encodeURIComponent(id)}/retry`, { method: 'POST', signal })
+export const discardContract = (id: string) => contractRequest<void>(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE', keepalive: true }, 20000)

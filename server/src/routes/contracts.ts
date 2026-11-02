@@ -1,117 +1,64 @@
 import { Router, type ErrorRequestHandler } from 'express';
-import multer from 'multer';
 import { requireAuth } from '../middleware/auth';
+import type { SessionClaims } from '../auth/session';
 import { AppError } from '../utils/AppError';
-import { completeConfiguredJson, type CompleteJson } from '../services/modelClient';
-import { analyzeContract } from '../contracts/analysis';
-import { ContractSessionStore } from '../contracts/sessionStore';
-import { PDF_LIMITS, parseContractPdf, validatePdfFile, validatePdfMetadata } from '../contracts/pdf';
-import { ContractUploadGate, UPLOAD_LIMITS } from '../contracts/uploadGate';
+import { ContractTaskManager, type ContractTask } from '../contracts/tasks';
+import { receivePdf } from '../contracts/receivePdf';
 
-// 只保存短期页文本和结果，不把原合同写进 uploads 或磁盘。
-export function createContractsRouter(options: { completeJson?: CompleteJson; store?: ContractSessionStore; uploadGate?: ContractUploadGate; parsePdf?: typeof parseContractPdf; uploadTimeoutMs?: number } = {}) {
+let defaultManager: ContractTaskManager | undefined;
+export function getContractTaskManager() { return defaultManager ??= new ContractTaskManager(); }
+export function createContractsRouter(options: { manager?: ContractTaskManager } = {}) {
   const router = Router();
-  const store = options.store ?? new ContractSessionStore();
-  const completeJson = options.completeJson ?? completeConfiguredJson;
-  const gate = options.uploadGate ?? new ContractUploadGate();
-  const parsePdf = options.parsePdf ?? parseContractPdf;
-  const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: PDF_LIMITS.maxBytes, files: 1, fields: 0, parts: 2, headerPairs: 30, fieldNameSize: 100 },
-    fileFilter: (_req, file, callback) => {
-      try { validatePdfMetadata(file); callback(null, true); }
-      catch (error) { callback(error as Error); }
-    }
-  }).single('file');
+  const manager = () => options.manager ?? getContractTaskManager();
   router.use(requireAuth);
-
-  router.post('/parse', (req, res, next) => {
+  router.get('/limits', (_req, res) => {
+    const { maxBytes, maxPages, maxCharacters, maxChunks, uploadTimeoutMs, taskTimeoutMs, ttlMs } = manager().limits;
+    res.setHeader('Cache-Control', 'no-store'); res.json({ success: true, data: { maxBytes, maxPages, maxCharacters, maxChunks, uploadTimeoutMs, taskTimeoutMs, ttlMs, maxFindings: 20 } });
+  });
+  router.post('/tasks', async (req, res, next) => {
     const userId = (req as unknown as { userId: number }).userId;
-    let release: () => void;
-    try {
-      release = gate.acquire(userId, req.ip ?? req.socket.remoteAddress ?? 'unknown');
-    } catch (error) {
-      if (error instanceof AppError && error.status === 429) res.setHeader('Retry-After', error.code === 'UPLOAD_RATE_LIMIT' ? '60' : '2');
-      next(error); return;
-    }
-    let parsing = false;
-    const close = () => { clearTimeout(timer); if (!parsing) release(); };
-    const timer = setTimeout(() => {
-      if (res.destroyed || res.writableEnded) return;
-      // 超时后关闭该上传连接，避免只释放槽位却继续接收正文。
-      res.setHeader('Connection', 'close');
-      res.once('finish', () => req.destroy());
-      res.status(408).json({ success: false, code: 'UPLOAD_TIMEOUT', message: '上传超过一分钟，请检查网络后重试。' });
-    }, options.uploadTimeoutMs ?? UPLOAD_LIMITS.timeoutMs);
-    timer.unref();
+    const claims = (req as unknown as { session: SessionClaims }).session;
+    const owner = manager(); let task: ContractTask | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+    let disconnected = false;
+    const close = () => { if (!res.writableEnded) { disconnected = true; task?.controller.abort(new AppError(499, 'REQUEST_CANCELLED', '连接已关闭。')); } };
     res.once('close', close);
     try {
-      if (!req.is('multipart/form-data')) throw new AppError(400, 'FILE_REQUIRED', '请使用 multipart/form-data 上传一份 PDF。');
+      const id = req.headers['x-contract-task-id'], size = Number(req.headers['x-contract-file-size']);
+      if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) throw new AppError(400, 'TASK_ID_REQUIRED', '缺少有效任务标识。');
+      if (!Number.isSafeInteger(size) || size < 1 || size > owner.limits.maxBytes) throw new AppError(413, 'FILE_SIZE', '文件大小超出当前上限。');
+      if (!req.is('multipart/form-data')) throw new AppError(400, 'FILE_REQUIRED', '请使用multipart上传一份PDF。');
       const length = Number(req.headers['content-length']);
-      if (Number.isFinite(length) && length > PDF_LIMITS.maxBytes + 16 * 1024) throw new AppError(413, 'FILE_SIZE', 'PDF 不能超过 10 MB。');
-      upload(req, res, error => {
-        clearTimeout(timer);
-        res.off('close', close);
-        if (error || res.destroyed || res.writableEnded) { release(); if (error && !res.destroyed) next(error); return; }
-        parsing = true;
-        // 断开连接后也等解析实际结束再释放，不能让取消绕过 CPU 并发限制。
-        void (async () => {
-          try {
-            if (!req.file) throw new AppError(400, 'FILE_REQUIRED', '请选择一份文字型 PDF。');
-            validatePdfFile(req.file);
-            const parsed = await parsePdf(req.file.buffer);
-            if (res.destroyed) return;
-            const filename = req.file.originalname.replace(/^.*[\\/]/, '').replace(/[\x00-\x1f\x7f]/g, '').slice(0, 180);
-            const session = store.create(userId, filename, parsed);
-            res.json({ success: true, data: { documentId: session.id, filename, pageCount: parsed.pageCount, characterCount: parsed.characterCount, expiresAt: new Date(session.expiresAt).toISOString() } });
-          } catch (cause) { if (!res.destroyed) next(cause); }
-          finally { release(); }
-        })();
-      });
-    } catch (error) { clearTimeout(timer); res.off('close', close); release(); next(error); }
+      if (Number.isFinite(length) && length > size + 65536) throw new AppError(413, 'FILE_SIZE', '请求大小超出预留空间。');
+      task = await owner.create(userId, req.ip ?? req.socket.remoteAddress ?? 'unknown', id, size, claims.exp * 1000);
+      if (disconnected || req.aborted) throw new AppError(400, 'UPLOAD_INCOMPLETE', '上传连接已关闭。');
+      const current = task;
+      timer = setTimeout(() => current.controller.abort(new AppError(408, 'UPLOAD_TIMEOUT', '上传超时，已停止接收。')), owner.limits.uploadTimeoutMs); timer.unref();
+      const filename = await receivePdf(req, task.files.incoming, task.files.pdf, size, task.controller.signal, bytes => { current.receivedBytes = bytes; });
+      task.controller.signal.throwIfAborted(); clearTimeout(timer);
+      owner.accept(task, filename);
+      res.status(202).setHeader('Cache-Control', 'no-store'); res.json({ success: true, data: owner.snapshot(task) });
+    } catch (error) {
+      const cause = task?.controller.signal.aborted && task.controller.signal.reason instanceof AppError ? task.controller.signal.reason : error;
+      if (task) await owner.rejectUpload(task, cause);
+      if (!res.destroyed) { res.setHeader('Connection', 'close'); res.once('finish', () => { if (!req.complete) req.destroy(); }); next(cause); }
+    } finally { clearTimeout(timer); res.off('close', close); }
   });
-
-  router.post('/analyze', async (req, res, next) => {
-    const userId = (req as unknown as { userId: number }).userId;
-    const controller = new AbortController();
-    const cancel = () => { if (!res.writableEnded) controller.abort(); };
-    res.on('close', cancel);
-    let session: ReturnType<ContractSessionStore['get']> | undefined;
-    let started = false;
-    try {
-      if (typeof req.body?.documentId !== 'string') throw new AppError(400, 'DOCUMENT_REQUIRED', '请先上传并解析合同。');
-      session = store.get(req.body.documentId, userId);
-      if (session.result) { res.json({ success: true, data: session.result }); return; }
-      if (store.isAnalyzing(userId)) throw new AppError(409, 'ANALYSIS_BUSY', '已有合同正在分析，请等待当前分析完成。');
-      session.analyzing = true;
-      started = true;
-      const result = await analyzeContract(session.pages, completeJson, controller.signal);
-      if (controller.signal.aborted) return;
-      session.result = result;
-      res.json({ success: true, data: result });
-    } catch (error) { if (!res.destroyed) next(error); }
-    finally {
-      if (session && started) session.analyzing = false;
-      res.off('close', cancel);
-    }
+  router.get('/tasks/:id', (req, res, next) => {
+    try { const owner = manager(); const task = owner.get(String(req.params.id), (req as unknown as { userId: number }).userId); res.setHeader('Cache-Control', 'no-store'); res.json({ success: true, data: owner.snapshot(task) }); } catch (error) { next(error); }
   });
-
-  router.delete('/:id', (req, res) => {
-    store.remove(String(req.params.id), (req as unknown as { userId: number }).userId);
-    res.json({ success: true });
+  router.post('/tasks/:id/retry', async (req, res, next) => {
+    try { const owner = manager(); const task = await owner.retry(String(req.params.id), (req as unknown as { userId: number }).userId, req.ip ?? 'unknown'); res.status(202).json({ success: true, data: owner.snapshot(task) }); } catch (error) { next(error); }
   });
-
-  const handleError: ErrorRequestHandler = (error, _req, res, _next) => {
+  router.delete('/tasks/:id', async (req, res, next) => {
+    try { await manager().remove(String(req.params.id), (req as unknown as { userId: number }).userId); res.json({ success: true }); } catch (error) { next(error); }
+  });
+  router.post(['/parse', '/analyze'], (_req, res) => res.status(410).json({ success: false, code: 'CONTRACT_API_CHANGED', message: '合同接口已升级，请刷新页面后使用任务上传。' }));
+  const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     if (res.headersSent || res.destroyed) return;
-    if (error instanceof multer.MulterError) {
-      res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ success: false, code: error.code, message: error.code === 'LIMIT_FILE_SIZE' ? 'PDF 不能超过 10 MB。' : '每次只能上传一份 PDF，请使用 file 字段。' });
-      return;
-    }
     const known = error instanceof AppError;
-    res.status(known ? error.status : 500).json({ success: false, code: known ? error.code : 'CONTRACT_ERROR', message: known ? error.message : '合同处理失败，请稍后重试。' });
+    if (known && error.status === 429) res.setHeader('Retry-After', error.code === 'UPLOAD_RATE_LIMIT' ? '60' : '2');
+    res.status(known ? error.status : 500).json({ success: false, code: known ? error.code : 'CONTRACT_ERROR', message: known ? error.message : '合同处理失败，请重试。' });
   };
-  router.use(handleError);
-  return router;
+  router.use(errorHandler); return router;
 }
-
 export default createContractsRouter();

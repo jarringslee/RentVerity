@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { AppError } from '../utils/AppError';
+import { readContractLimits } from './limits';
 
-export const PDF_LIMITS = { maxBytes: 10 * 1024 * 1024, maxPages: 40, maxCharacters: 60000 } as const;
+export const PDF_LIMITS = readContractLimits();
 export interface ContractPage { page: number; text: string }
 export interface ParsedContract { pages: ContractPage[]; pageCount: number; characterCount: number }
 
@@ -13,38 +14,41 @@ export function validatePdfMetadata(file: { originalname: string; mimetype: stri
 
 export function validatePdfFile(file: { buffer: Buffer; originalname: string; mimetype: string }): void {
   validatePdfMetadata(file);
-  if (file.buffer.length === 0 || file.buffer.length > PDF_LIMITS.maxBytes) throw new AppError(413, 'FILE_SIZE', 'PDF 不能为空且不能超过 10 MB。');
+  if (file.buffer.length === 0 || file.buffer.length > PDF_LIMITS.maxBytes) throw new AppError(413, 'FILE_SIZE', 'PDF 大小超出当前限制。');
   // 本项目只接受标准 PDF 文件头，不接受在可执行/HTML 文件后拼接的伪装内容。
   if (!/^%PDF-(?:1\.[0-7]|2\.0)(?:\r|\n|\s)/.test(file.buffer.subarray(0, 16).toString('latin1'))) throw new AppError(400, 'FILE_TYPE', '文件内容不是标准 PDF，请重新导出为文字型 PDF。');
 }
 
-export async function parseContractPdf(buffer: Buffer): Promise<ParsedContract> {
+// 生产链路只在 parserWorker 子进程调用；导出供小样本单元测试。
+export async function parseContractPdf(buffer: Buffer, limits = PDF_LIMITS): Promise<ParsedContract> {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const pdfRoot = path.dirname(require.resolve('pdfjs-dist/package.json'));
   const task = getDocument({
-    data: Uint8Array.from(buffer),
+    data: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
     cMapUrl: path.join(pdfRoot, 'cmaps').replace(/\\/g, '/') + '/',
     cMapPacked: true,
     standardFontDataUrl: path.join(pdfRoot, 'standard_fonts').replace(/\\/g, '/') + '/',
     useSystemFonts: false,
     disableFontFace: true,
     useWasm: false,
+    enableXfa: false,
+    maxImageSize: 0,
     stopAtErrors: true,
     verbosity: 0
   });
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; void task.destroy(); }, 15000);
+  const timer = setTimeout(() => { timedOut = true; void task.destroy(); }, limits.parserTimeoutMs);
   try {
     const pdf = await task.promise;
-    if (pdf.numPages > PDF_LIMITS.maxPages) throw new AppError(413, 'PDF_PAGE_LIMIT', '首版最多支持 40 页 PDF。');
+    if (pdf.numPages > limits.maxPages) throw new AppError(413, 'PDF_PAGE_LIMIT', `PDF 超过 ${limits.maxPages} 页限制。`);
     const pages: ContractPage[] = [];
     let characterCount = 0;
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
       const page = await pdf.getPage(pageNumber);
       const content = await page.getTextContent();
-      const text = content.items.map(item => 'str' in item ? item.str + (item.hasEOL ? '\n' : ' ') : '').join('').trim();
+      const text = content.items.map(item => 'str' in item ? item.str + (item.hasEOL ? '\n' : ' ') : '').join('').trim().normalize('NFC');
       characterCount += text.length;
-      if (characterCount > PDF_LIMITS.maxCharacters) throw new AppError(413, 'PDF_TEXT_LIMIT', '提取文本超过 60000 字符，请拆分合同后分析。');
+      if (characterCount > limits.maxCharacters) throw new AppError(413, 'PDF_TEXT_LIMIT', `提取文本超过 ${limits.maxCharacters} 字符限制。`);
       pages.push({ page: pageNumber, text });
       page.cleanup();
     }
