@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "test:chat": "node --experimental-strip-types --test scripts/chat-state.test.cjs",
     "test:session": "node --test scripts/session-state.test.cjs",
+    "test:assistant": "node --test scripts/assistant-protocol.test.cjs",
+    "test:assistant:ui": "node scripts/assistant-reliability-ui.cjs",
     "check:sensitive": "node scripts/check-sensitive-files.cjs"
   },
   "dependencies": {

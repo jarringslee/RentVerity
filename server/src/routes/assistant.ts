@@ -4,6 +4,8 @@ import { AppError } from '../utils/AppError';
 import { configuredAssistantModel, type AssistantModel } from '../services/chatModel';
 import { houseRepository, type HouseRepository } from '../houses/repository';
 import { parseAssistantRequest, runAssistant } from '../assistant/service';
+import { AssistantExecutionError, type AssistantAudit } from '../assistant/execution';
+import { verifySession, type SessionClaims } from '../auth/session';
 
 async function writeEvent(res: Response, event: string, data: unknown, signal: AbortSignal) {
   signal.throwIfAborted();
@@ -18,16 +20,25 @@ async function writeEvent(res: Response, event: string, data: unknown, signal: A
     if (signal.aborted || res.destroyed) closed();
   });
 }
-export function createAssistantRouter(options: { model?: AssistantModel; repository?: HouseRepository; rateLimit?: number } = {}) {
+export function createAssistantRouter(options: { model?: AssistantModel; repository?: HouseRepository; rateLimit?: number; audit?: AssistantAudit } = {}) {
   const router = Router(), activeUsers = new Set<number>(), windows = new Map<number, { since: number; count: number }>();
   router.use(requireAuth);
   router.post('/message', async (req, res, next) => {
     const userId = (req as unknown as { userId: number }).userId;
     const controller = new AbortController(), deadline = AbortSignal.timeout(130000), signal = AbortSignal.any([controller.signal, deadline]);
     const cancel = () => { if (!res.writableEnded) controller.abort(); };
-    let started = false, heartbeat: ReturnType<typeof setInterval> | undefined;
+    let started = false, heartbeat: ReturnType<typeof setInterval> | undefined, expiryTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       const request = parseAssistantRequest(req.body);
+      const session = (req as unknown as { session: SessionClaims }).session;
+      const assertActive = () => {
+        try {
+          const current = verifySession(req.headers);
+          if (current.userId !== userId || current.jti !== session.jti) throw new Error('session changed');
+        } catch { throw new AppError(401, 'AUTH_EXPIRED', '登录身份已失效，请重新登录。'); }
+      };
+      const remaining = session.exp * 1000 - Date.now();
+      if (remaining <= 130000) expiryTimer = setTimeout(() => controller.abort(new AppError(401, 'AUTH_EXPIRED', '登录已到期。')), Math.max(1, remaining));
       if (activeUsers.has(userId)) throw new AppError(409, 'ASSISTANT_BUSY', '当前回答尚未结束，请先停止或稍后重试。');
       if (activeUsers.size >= 8) throw new AppError(429, 'ASSISTANT_CAPACITY', '助手服务繁忙，请稍后重试。');
       const now = Date.now();
@@ -43,18 +54,19 @@ export function createAssistantRouter(options: { model?: AssistantModel; reposit
         if (res.destroyed || signal.aborted || res.writableLength > 65536) { controller.abort(); return; }
         res.write(': heartbeat\n\n');
       }, 12000);
-      await runAssistant(request, options.model ?? configuredAssistantModel, options.repository ?? houseRepository, ({ event, data }) => writeEvent(res, event, data, signal), signal);
+      await runAssistant(request, options.model ?? configuredAssistantModel, options.repository ?? houseRepository, ({ event, data }) => writeEvent(res, event, data, signal), signal, { assertActive, audit: options.audit });
       res.end();
     } catch (error) {
       if (!res.destroyed) {
         if (!res.headersSent) next(error);
         else {
           const known = error instanceof AppError;
-          const data = deadline.aborted ? { code: 'ASSISTANT_TIMEOUT', message: '本轮处理超时，请手动重试。' } : { code: known ? error.code : 'ASSISTANT_ERROR', message: known ? error.message : '助手连接中断，请手动重试。' };
+          const summary = error instanceof AssistantExecutionError ? error.summary : undefined;
+          const data = { ...summary, ...(deadline.aborted ? { code: 'ASSISTANT_TIMEOUT', message: '本轮处理超时，请手动重试。' } : { code: known ? error.code : 'ASSISTANT_ERROR', message: known ? error.message : '助手连接中断，请手动重试。' }), retainResults: summary?.queryState === 'succeeded' };
           res.end(`event: error\ndata: ${JSON.stringify(data)}\n\n`);
         }
       }
-    } finally { if (started) activeUsers.delete(userId); if (heartbeat) clearInterval(heartbeat); res.off('close', cancel); }
+    } finally { if (started) activeUsers.delete(userId); if (heartbeat) clearInterval(heartbeat); if (expiryTimer) clearTimeout(expiryTimer); res.off('close', cancel); }
   });
   const handleError: ErrorRequestHandler = (error, _req, res, _next) => {
     if (res.headersSent || res.destroyed) return;

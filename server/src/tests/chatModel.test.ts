@@ -25,9 +25,9 @@ test('real local HTTP adapter validates tool protocol and incremental UTF-8/SSE,
     if (mode === 'unauthorized' || mode === 'rate') { res.writeHead(mode === 'rate' ? 429 : 401); res.end('private provider text'); return; }
     if (!body.stream) {
       assert.equal(body.tool_choice, 'required'); assert.ok(Array.isArray(body.tools));
-      const call = { id: 'protocol-call', type: 'function', function: { name: 'test_tool', arguments: '{}' } };
+      const call = { id: 'protocol-call', type: 'function', function: { name: mode === 'unknown' ? 'run_sql' : mode === 'multiple-search' ? 'search_houses' : 'test_tool', arguments: '{}' } };
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ choices: [{ finish_reason: 'tool_calls', message: { content: null, tool_calls: mode === 'parallel' ? [call, call] : [call] } }] })); return;
+      res.end(JSON.stringify({ choices: [{ finish_reason: 'tool_calls', message: { content: null, tool_calls: ['parallel', 'multiple-search'].includes(mode) ? [call, call] : [call] } }] })); return;
     }
     if (mode === 'invalid-content-type') { res.end('{}'); return; }
     res.setHeader('Content-Type', 'text/event-stream'); res.flushHeaders();
@@ -49,11 +49,14 @@ test('real local HTTP adapter validates tool protocol and incremental UTF-8/SSE,
   t.after(() => { server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())); });
   const config = { apiKey: 'protocol-only-key', baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: 'local-protocol-stub', timeoutMs: 3000 };
   const model = createChatModel(config), signal = new AbortController().signal, messages = [{ role: 'user' as const, content: '合成协议测试' }];
-  assert.equal((await model.choose(messages, [], signal)).function.name, 'test_tool');
+  const tools = ['test_tool', 'search_houses'].map(name => ({ type: 'function' as const, function: { name, description: 'protocol test', parameters: {} } }));
+  assert.equal((await model.choose(messages, tools, signal)).function.name, 'test_tool');
   let result = '', sawBeforeEnd = false;
   await model.stream(messages, async text => { result += text; if (!ended) sawBeforeEnd = true; }, signal);
   assert.equal(result, '你好🏠\n**第一段**第二段'); assert.equal(sawBeforeEnd, true);
-  mode = 'parallel'; await assert.rejects(model.choose(messages, [], signal), (error: AppError) => error.code === 'AI_TOOL_INVALID');
+  for (const [next, code] of [['parallel', 'AI_TOOL_INVALID'], ['unknown', 'AI_TOOL_FORBIDDEN'], ['multiple-search', 'AI_TOOL_MULTIPLE_SEARCH']]) {
+    mode = next; await assert.rejects(model.choose(messages, tools, signal), (error: AppError) => error.code === code);
+  }
   for (const [next, code] of [['unauthorized', 'AI_AUTH_FAILED'], ['rate', 'AI_RATE_LIMIT'], ['bad-json', 'AI_INVALID_RESPONSE'], ['tool-in-text', 'AI_TOOL_INVALID'], ['disconnect', 'AI_STREAM_INTERRUPTED'], ['missing-done', 'AI_STREAM_INTERRUPTED'], ['length', 'AI_TRUNCATED'], ['invalid-content-type', 'AI_STREAM_INVALID']]) {
     mode = next;
     await assert.rejects(model.stream(messages, async () => {}, signal), (error: AppError) => error.code === code && !error.message.includes('private provider text'));

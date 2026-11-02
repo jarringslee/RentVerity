@@ -3,9 +3,7 @@ import { API_BASE_URL, SESSION_HEADER } from '../services/config'
 import { withAuthMutation, getAuthRevision, isAuthMutating } from '../services/authMutation'
 
 type CurrentUser = {
-  id: number; username: string; phone: string; gender: 'male' | 'female';
-  city: string | null; avatarUrl: string | null; preferences: string[];
-  sessionId: string; expiresAt: string; createdAt?: string
+  id: number; username: string; phone: string; gender: 'male' | 'female';city: string | null; avatarUrl: string | null; preferences: string[];sessionId: string; expiresAt: string; createdAt?: string
 }
 
 const LEGACY_KEY = 'rentverity_current_user'

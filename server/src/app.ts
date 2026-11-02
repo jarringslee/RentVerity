@@ -11,13 +11,13 @@ import favoritesRouter from './routes/favorites';
 import usersRouter from './routes/users';
 import chatRouter from './routes/chat';
 import contractsRouter from './routes/contracts';
-import assistantRouter from './routes/assistant';
+import assistantRouter, { createAssistantRouter } from './routes/assistant';
 import { attachChatWss } from './ws/chatGateway';
 import { getJwtSecret } from './config/jwt';
 import { logSafeError } from './utils/logSafeError';
 import { isAllowedOrigin, requireTrustedSource } from './middleware/csrf';
 
-export function createApp() {
+export function createApp(options: { assistant?: Parameters<typeof createAssistantRouter>[0] } = {}) {
 const app = express();
 
 fs.mkdirSync(UPLOADS_ROOT, { recursive: true });
@@ -52,7 +52,7 @@ app.use('/favorites', favoritesRouter);
 app.use('/users', usersRouter);
 app.use('/chat', chatRouter);
 app.use('/contracts', contractsRouter);
-app.use('/assistant', assistantRouter);
+app.use('/assistant', options.assistant ? createAssistantRouter(options.assistant) : assistantRouter);
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const type = (error as { type?: string })?.type;

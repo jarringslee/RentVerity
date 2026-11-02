@@ -69,8 +69,14 @@ export function createChatModel(config: ModelConfig): AssistantModel {
         }
         text += decoder.decode();
       } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
-      const choice = JSON.parse(text)?.choices?.[0], calls = choice?.message?.tool_calls;
-      if (choice?.finish_reason !== 'tool_calls' || !Array.isArray(calls) || calls.length !== 1) throw new AppError(502, 'AI_TOOL_INVALID', '助手未返回单个有效工具调用，请重试。');
+      let envelope: any;
+      try { envelope = JSON.parse(text); } catch { throw new AppError(502, 'AI_TOOL_JSON', '模型工具响应不是有效JSON。'); }
+      const choice = envelope?.choices?.[0], calls = choice?.message?.tool_calls;
+      if (choice?.finish_reason === 'stop' && (!Array.isArray(calls) || !calls.length)) throw new AppError(502, 'AI_TOOL_MISSING', '模型未调用必需工具。');
+      if (choice?.finish_reason !== 'tool_calls' || !Array.isArray(calls) || !calls.length) throw new AppError(502, 'AI_TOOL_INVALID', '助手未返回单个有效工具调用，请重试。');
+      // 多工具返回也先检查越权；不能挑选其中一个执行，或用纠错掩盖未知工具。
+      if (calls.some(call => !tools.some(tool => tool.function.name === call?.function?.name))) throw new AppError(502, 'AI_TOOL_FORBIDDEN', '模型选择未授权工具，已拒绝。');
+      if (calls.length > 1) throw new AppError(502, calls.every(call => call.function.name === 'search_houses') ? 'AI_TOOL_MULTIPLE_SEARCH' : 'AI_TOOL_INVALID', '模型返回多个调用，本轮没有执行；请明确单次查询条件。');
       const call = calls[0];
       if (call?.type !== 'function' || typeof call.id !== 'string' || !call.id || call.id.length > 200 || typeof call.function?.name !== 'string' || typeof call.function.arguments !== 'string' || call.function.arguments.length > 12000) throw new AppError(502, 'AI_TOOL_INVALID', '助手工具参数无效。');
       return { id: call.id, type: 'function', function: { name: call.function.name, arguments: call.function.arguments } };
